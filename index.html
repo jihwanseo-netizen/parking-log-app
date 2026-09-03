@@ -548,6 +548,23 @@
     z-index: 999;
   }
 
+  #mapFabs{
+    position: absolute; right: 14px; bottom: 14px;
+    display: flex; flex-direction: column; gap: 10px;
+    z-index: 500;
+  }
+  .map-fab{
+    width: 46px; height: 46px; border-radius: 50%;
+    background: var(--asphalt-2); color: var(--ink);
+    border: 1px solid var(--line);
+    font-size: 20px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    cursor: pointer;
+  }
+  .map-fab.active{ background: var(--yellow); color: #1A1C1F; border-color: var(--yellow); }
+  .map-fab.disabled{ opacity: 0.4; }
+
   .pin-wrap{ display:flex; flex-direction:column; align-items:center; transform: translateY(-6px); }
   .pin-badge{
     font-size: 11px; font-weight: 800; color: #fff;
@@ -717,6 +734,10 @@
   <div id="mapwrap">
     <div id="loading">불러오는 중…</div>
     <div id="map"></div>
+    <div id="mapFabs">
+      <button id="btnFollow" class="map-fab" type="button" onclick="AppMap.toggleFollow()" title="현위치 따라가기">🎯</button>
+      <button id="btnRefresh" class="map-fab" type="button" onclick="AppMap.refreshApp()" title="새로고침">↻</button>
+    </div>
   </div>
   <div id="mobileNav">
     <button class="mnav-btn" data-view="map">지도</button>
@@ -790,6 +811,7 @@
   var roadPolylines = {};
   var liveMarker = null;
   var lastPathPushAt = 0;
+  var followMode = false; // true면 실시간 위치가 갱신될 때마다 지도를 그 위치로 따라감(일반도로 로깅 중에만 동작)
 
   var LOG_META = {
     road:          { label: '일반도로', color: '#2F6FED' },
@@ -1014,7 +1036,7 @@
         var id = change.doc.id;
         if (change.type === 'removed'){
           logs = logs.filter(function(l){ return l.id !== id; });
-          if (roadPolylines[id]){ roadPolylines[id].setMap(null); delete roadPolylines[id]; }
+          clearRoadPolylines(id);
           return;
         }
         var data = change.doc.data();
@@ -1057,7 +1079,7 @@
     }
     if (Array.isArray(copy.path)){
       copy.path = copy.path.map(function(p){
-        return Array.isArray(p) ? { lat: p[0], lng: p[1] } : p;
+        return Array.isArray(p) ? { lat: p[0], lng: p[1], t: p[2] || null } : p;
       });
     }
     return copy;
@@ -1408,8 +1430,9 @@
   }
 
   /* ---------- Geolocation path tracking ---------- */
-  // log.path는 로컬에서는 [lat,lng] 배열, 클라우드에서 내려받으면 {lat,lng} 객체로 섞여 있을 수
-  // 있어서(toCloudSafeLog 참고) 카카오맵 LatLng로 바꿀 때 둘 다 받아준다.
+  // log.path는 로컬에서는 [lat,lng,t] 배열, 클라우드에서 내려받으면 {lat,lng,t} 객체로 섞여 있을 수
+  // 있어서(toCloudSafeLog 참고) 카카오맵 LatLng로 바꿀 때 둘 다 받아준다. t(타임스탬프)는 예전 기록엔
+  // 없을 수 있어 없으면 null로 취급.
   function toKakaoLatLng(p){
     var lat = Array.isArray(p) ? p[0] : p.lat;
     var lng = Array.isArray(p) ? p[1] : p.lng;
@@ -1418,25 +1441,55 @@
   function toKakaoPath(points){
     return (points || []).map(toKakaoLatLng);
   }
-  function ensurePolyline(logId, color){
-    if (!roadPolylines[logId]){
-      roadPolylines[logId] = new kakao.maps.Polyline({
+  function pointTime(p){
+    var t = Array.isArray(p) ? p[2] : p.t;
+    return t || null;
+  }
+  // 화면이 꺼지거나 앱이 백그라운드로 가면 브라우저가 위치 업데이트를 몇 초~몇 분씩 멈춰버린다.
+  // 다시 돌아왔을 때 그 사이 건너뛴 두 점을 직선으로 이어버리면 지도 위에서 길을 무시하고
+  // "확 튀는" 것처럼 보이므로, 신호 간격이 비정상적으로 크면 선을 잇지 않고 구간을 끊어서 그린다.
+  var ROAD_GAP_MS = 20000; // 이 이상 벌어지면 새 구간으로 취급
+  function buildPathSegments(path){
+    var segments = [];
+    var current = [];
+    (path || []).forEach(function(p, i){
+      if (current.length){
+        var prevT = pointTime(path[i - 1]);
+        var curT = pointTime(p);
+        if (prevT && curT && (curT - prevT) > ROAD_GAP_MS){
+          segments.push(current);
+          current = [];
+        }
+      }
+      current.push(p);
+    });
+    if (current.length) segments.push(current);
+    return segments;
+  }
+  function clearRoadPolylines(logId){
+    (roadPolylines[logId] || []).forEach(function(pl){ pl.setMap(null); });
+    delete roadPolylines[logId];
+  }
+  function renderRoadPath(logId, path, color){
+    if (!map) return;
+    clearRoadPolylines(logId);
+    var segments = buildPathSegments(path).filter(function(seg){ return seg.length > 1; });
+    roadPolylines[logId] = segments.map(function(seg){
+      return new kakao.maps.Polyline({
         map: map,
-        path: [],
+        path: toKakaoPath(seg),
         strokeWeight: 4,
         strokeColor: color || '#2F6FED',
         strokeOpacity: 0.75,
         strokeStyle: 'solid'
       });
-    }
-    return roadPolylines[logId];
+    });
   }
   function drawSavedPaths(){
     if (!map) return;
     logs.forEach(function(l){
       if (l.type === 'road' && l.path && l.path.length > 1){
-        var pl = ensurePolyline(l.id);
-        pl.setPath(toKakaoPath(l.path));
+        renderRoadPath(l.id, l.path);
       }
     });
   }
@@ -1457,10 +1510,9 @@
       setGeoStatus(null);
       var log = logs.find(function(l){ return l.id === activeRoadId; });
       if (!log) return;
-      var latlng = [pos.coords.latitude, pos.coords.longitude];
+      var latlng = [pos.coords.latitude, pos.coords.longitude, Date.now()];
       log.path.push(latlng);
-      var pl = ensurePolyline(log.id);
-      pl.setPath(toKakaoPath(log.path));
+      renderRoadPath(log.id, log.path);
       var kakaoLatLng = toKakaoLatLng(latlng);
       if (!liveMarker){
         liveMarker = new kakao.maps.CustomOverlay({
@@ -1475,6 +1527,7 @@
         map.setLevel(KAKAO_LEVEL_LIVE);
       } else {
         liveMarker.setPosition(kakaoLatLng);
+        if (followMode) map.setCenter(kakaoLatLng);
       }
       saveLogs();
       // 경로는 GPS 신호 올 때마다(약 2초) 갱신되지만, 클라우드 전송은 5초에 한 번으로 묶어서
@@ -1496,6 +1549,27 @@
     if (liveMarker){ liveMarker.setMap(null); liveMarker = null; }
     setGeoStatus(null);
   }
+  // 화면이 꺼졌다 켜지거나 다른 앱에서 돌아왔을 때, watchPosition이 다시 정상 주기로 돌아올
+  // 때까지 기다리지 않고 즉시 현재 위치를 한 번 찍어서 끊긴 구간을 최대한 빨리 이어준다.
+  // (신호가 오래 끊겼던 구간 자체는 buildPathSegments가 알아서 선으로 잇지 않고 끊어 그림)
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) return;
+    if (!activeRoadId || watchId === null || !navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(function(pos){
+      var log = logs.find(function(l){ return l.id === activeRoadId; });
+      if (!log) return;
+      var latlng = [pos.coords.latitude, pos.coords.longitude, Date.now()];
+      log.path.push(latlng);
+      renderRoadPath(log.id, log.path);
+      if (liveMarker){
+        var kakaoLatLng = toKakaoLatLng(latlng);
+        liveMarker.setPosition(kakaoLatLng);
+        if (followMode && map) map.setCenter(kakaoLatLng);
+      }
+      saveLogs();
+      pushLogToCloud(log);
+    }, function(){ /* 실패해도 다음 watchPosition을 기다리면 되므로 무시 */ }, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
+  });
   function focusOnLog(logId, keepZoom){
     if (!map) return;
     var log = logs.find(function(l){ return l.id === logId; });
@@ -1515,6 +1589,14 @@
     var btnParking = document.getElementById('btnParking');
 
     var anyActive = activeRoadId || activeLotId || activeParkingId;
+
+    // 일반도로 로깅이 꺼지면 따라갈 실시간 위치도 없어지므로 따라가기도 같이 꺼준다.
+    if (!activeRoadId && followMode) followMode = false;
+    var btnFollow = document.getElementById('btnFollow');
+    if (btnFollow){
+      btnFollow.classList.toggle('active', followMode);
+      btnFollow.classList.toggle('disabled', !activeRoadId);
+    }
 
     // 다른 종류가 진행 중이면 이 버튼은 눌러도 시작이 안 되는 상태.
     // 예전엔 이걸 그냥 HTML disabled로 막아서 눌러도 "아무 반응 없음"으로 보였는데(혼란의 원인),
@@ -1831,7 +1913,7 @@
       renderAll();
     },
     deleteLog: function(id){
-      if (roadPolylines[id]){ roadPolylines[id].setMap(null); delete roadPolylines[id]; }
+      clearRoadPolylines(id);
       var wasActiveRoad = (activeRoadId === id);
       logs = logs.filter(function(l){ return l.id !== id; });
       if (wasActiveRoad) stopRoadTracking();
@@ -1856,6 +1938,22 @@
       renderLogPanel();
       renderLogList();
       showToast('강제 종료했어요.', 1200);
+    },
+    // 지도가 실시간 위치를 계속 따라가게 켜고 끈다. 일반도로 로깅 중일 때만 의미가 있음
+    // (실시간 경로 추적 중이 아니면 따라갈 위치 자체가 없음).
+    toggleFollow: function(){
+      if (!activeRoadId){
+        showToast('일반도로 로깅 중에만 사용할 수 있어요.', 1500);
+        return;
+      }
+      followMode = !followMode;
+      var btnFollow = document.getElementById('btnFollow');
+      if (btnFollow) btnFollow.classList.toggle('active', followMode);
+      if (followMode && liveMarker && map) map.setCenter(liveMarker.getPosition());
+    },
+    // PWA/동기화가 꼬였을 때를 위한 단순 새로고침(페이지 전체 리로드).
+    refreshApp: function(){
+      location.reload();
     },
     startRename: function(id){
       renamingId = id;
@@ -2017,6 +2115,16 @@
       var latlng = mouseEvent.latLng;
       var ll = { lat: latlng.getLat(), lng: latlng.getLng() };
       openMapPopup(ll.lat, ll.lng, editPopupHtml(null), { pending: ll });
+    });
+    // 따라가기 켜진 상태에서 사용자가 직접 지도를 끌면, 계속 원위치로 스냅되는 게 아니라
+    // 따라가기를 꺼서 자유롭게 볼 수 있게 한다(내비 앱들의 일반적인 동작 방식).
+    kakao.maps.event.addListener(map, 'dragstart', function(){
+      if (followMode){
+        followMode = false;
+        var btnFollow = document.getElementById('btnFollow');
+        if (btnFollow) btnFollow.classList.remove('active');
+        showToast('따라가기가 꺼졌어요.', 1200);
+      }
     });
   }
 
