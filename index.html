@@ -735,6 +735,7 @@
     <div id="loading">불러오는 중…</div>
     <div id="map"></div>
     <div id="mapFabs">
+      <button id="btnVisited" class="map-fab" type="button" onclick="AppMap.toggleVisitedPins()" title="갔던 곳 보기">📍</button>
       <button id="btnFollow" class="map-fab" type="button" onclick="AppMap.toggleFollow()" title="현위치 따라가기">🎯</button>
       <button id="btnRefresh" class="map-fab" type="button" onclick="AppMap.refreshApp()" title="새로고침">↻</button>
     </div>
@@ -812,6 +813,7 @@
   var liveMarker = null;
   var lastPathPushAt = 0;
   var followMode = false; // true면 실시간 위치가 갱신될 때마다 지도를 그 위치로 따라감(일반도로 로깅 중에만 동작)
+  var showVisited = false; // true일 때만 '갔던 곳'(visited=true) 핀을 지도에 표시. 평소엔 숨겨서 지도가 복잡해지지 않게 함
 
   var LOG_META = {
     road:          { label: '일반도로', color: '#2F6FED' },
@@ -1280,6 +1282,7 @@
     Object.keys(markersById).forEach(function(id){ markersById[id].setMap(null); });
     markersById = {};
     spots.forEach(function(spot){
+      if (spot.visited && !showVisited) return; // 갔던 곳은 버튼을 켰을 때만 표시
       var overlay = new kakao.maps.CustomOverlay({
         position: new kakao.maps.LatLng(spot.lat, spot.lng),
         content: makePinHtml(spot),
@@ -1954,6 +1957,14 @@
     // PWA/동기화가 꼬였을 때를 위한 단순 새로고침(페이지 전체 리로드).
     refreshApp: function(){
       location.reload();
+    },
+    // '갔던 곳'(visited=true) 핀은 평소엔 숨겨두고, 버튼을 눌렀을 때만 지도에 보여줌.
+    // (주의: 장소별 방문완료 토글은 toggleVisited(id)가 이미 사용 중이라 이름을 다르게 둠)
+    toggleVisitedPins: function(){
+      showVisited = !showVisited;
+      var btnVisited = document.getElementById('btnVisited');
+      if (btnVisited) btnVisited.classList.toggle('active', showVisited);
+      renderMarkers();
     },
     startRename: function(id){
       renamingId = id;
