@@ -1110,10 +1110,40 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .popup-view-height{ font-size: 12.5px; color: var(--ink-dim); margin-bottom: 4px; }
   .popup-view-note{ font-size: 12.5px; color: var(--ink); margin-bottom: 8px; line-height: 1.4; }
 
+  /* ---------- Mobile bottom nav (map / checklist / logs as full-screen tabs) ---------- */
+  #mobileNav{ display:none; }
+  .mnav-btn{
+    flex:1;
+    background:transparent;
+    border:none;
+    color: var(--ink-dim);
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 11px 4px 9px 4px;
+    cursor:pointer;
+  }
+  .mnav-btn.active{ color: var(--yellow); }
+
   @media (max-width: 760px){
-    #app{ flex-direction: column; }
-    #sidebar{ width: 100%; min-width: 0; height: 46vh; border-right:none; border-bottom: 1px solid var(--line); }
-    #mapwrap{ height: 54vh; }
+    html, body{ height: 100%; }
+    #app{ flex-direction: column; height: 100vh; }
+    #sidebar{ width: 100%; min-width: 0; border-right:none; flex: 1 1 auto; min-height: 0; }
+    #mapwrap{ flex: 1 1 auto; min-height: 0; }
+    #tabs{ display: none; } /* replaced by #mobileNav on small screens */
+
+    #mobileNav{
+      display:flex;
+      flex-shrink:0;
+      background: var(--asphalt);
+      border-top: 1px solid var(--line);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    /* show only the panel matching the current mobile tab */
+    #app[data-mobile-view="map"] #sidebar{ display:none; }
+    #app[data-mobile-view="spots"] #mapwrap,
+    #app[data-mobile-view="logs"] #mapwrap{ display:none; }
   }
 
 
@@ -1186,6 +1216,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <div id="loading">불러오는 중…</div>
     <div id="map"></div>
   </div>
+  <div id="mobileNav">
+    <button class="mnav-btn" data-view="map">지도</button>
+    <button class="mnav-btn" data-view="spots">장소 체크리스트</button>
+    <button class="mnav-btn" data-view="logs">로깅 기록</button>
+  </div>
 </div>
 <script>
 /* @preserve
@@ -1225,6 +1260,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
   var editingId = null;
   var storageReady = true;
   var activeTab = 'spots';
+  var mobileView = 'spots'; // mobile-only: 'map' | 'spots' | 'logs' — controls which panel is full-screen
   var activeRoadId = null;
   var activeLotId = null;
   var activeParkingId = null;
@@ -1813,6 +1849,29 @@ svg.leaflet-image-layer.leaflet-interactive path {
     });
   }
 
+  function setMobileView(view){
+    mobileView = view;
+    var app = document.getElementById('app');
+    if (app) app.setAttribute('data-mobile-view', view);
+    Array.prototype.forEach.call(document.querySelectorAll('.mnav-btn'), function(b){
+      b.classList.toggle('active', b.getAttribute('data-view') === view);
+    });
+    if (view === 'spots' || view === 'logs'){
+      activeTab = view;
+      Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), function(b){
+        b.classList.toggle('active', b.getAttribute('data-tab') === view);
+      });
+      var controlsEl = document.getElementById('controls');
+      if (controlsEl) controlsEl.style.display = view === 'spots' ? 'block' : 'none';
+      renderList();
+    }
+    if (view === 'map' && map){
+      // the map container was display:none while another mobile tab was showing;
+      // Leaflet needs a nudge to recompute its size once it's visible again.
+      setTimeout(function(){ map.invalidateSize(); }, 50);
+    }
+  }
+
   function bindControls(){
     document.getElementById('search').addEventListener('input', function(e){
       searchTerm = e.target.value;
@@ -1858,11 +1917,18 @@ svg.leaflet-image-layer.leaflet-interactive path {
       var inherited = lotLog ? (lotLog.label + ' - 주차씬') : undefined;
       startLog('parking_scene', inherited);
     });
+
+    Array.prototype.forEach.call(document.querySelectorAll('.mnav-btn'), function(btn){
+      btn.addEventListener('click', function(){
+        setMobileView(btn.getAttribute('data-view'));
+      });
+    });
   }
 
   (async function start(){
     initMap();
     bindControls();
+    setMobileView(mobileView);
     await loadSpots();
     await loadLogs();
     renderAll();
