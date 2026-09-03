@@ -920,6 +920,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
     font-variant-numeric: tabular-nums;
     color: var(--ink);
     font-weight: 700;
+    transition: color 1s linear;
+  }
+  .log-timer.log-timer-overdue{
+    animation: timerOverduePulse 1s ease-in-out infinite;
+  }
+  @keyframes timerOverduePulse{
+    0%, 100%{ opacity: 1; }
+    50%{ opacity: 0.5; }
   }
   .log-btn-row{
     display: flex;
@@ -1188,9 +1196,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <button class="log-btn" id="btnRoad">일반도로 로깅 시작</button>
         <button class="log-btn" id="btnLot">주차장 로깅 시작</button>
         <button class="log-btn" id="btnParking">주차 로깅 시작</button>
-      </div>
-      <div class="log-btn-row log-sub" id="sceneRow" style="display:none;">
-        <button class="log-btn" id="btnScene">주차씬으로 전환 (로깅 시작)</button>
       </div>
       <div class="geo-status" id="geoStatus" style="display:none;"></div>
     </div>
@@ -1602,8 +1607,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
     var btnRoad = document.getElementById('btnRoad');
     var btnLot = document.getElementById('btnLot');
     var btnParking = document.getElementById('btnParking');
-    var btnScene = document.getElementById('btnScene');
-    var sceneRow = document.getElementById('sceneRow');
 
     var anyActive = activeRoadId || activeLotId || activeParkingId;
 
@@ -1621,13 +1624,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
     btnParking.textContent = activeParkingId ? '주차 로깅 종료' : '주차 로깅 시작';
     btnParking.className = 'log-btn' + (activeParkingId ? ' on-parking' : '');
     btnParking.disabled = !!(activeRoadId || activeLotId);
-
-    // scene row only while lot active
-    sceneRow.style.display = activeLotId ? 'flex' : 'none';
-    if (activeLotId){
-      btnScene.textContent = activeSceneId ? '주차씬 로깅 종료' : '주차씬으로 전환 (로깅 시작)';
-      btnScene.className = 'log-btn' + (activeSceneId ? ' on-scene' : '');
-    }
 
     if (activeSceneId){
       dot.className = 'log-status-dot on';
@@ -1661,13 +1657,32 @@ svg.leaflet-image-layer.leaflet-interactive path {
     }
   }
 
+  var RESTART_LIMIT_MS = 4 * 60 * 1000; // 주차장/주차 로깅은 4분 안에 끊었다가 다시 시작해야 함
+  var TIMER_COLOR_FROM = [244, 242, 236]; // var(--ink)
+  var TIMER_COLOR_TO   = [229, 72, 77];   // 경고색 (LIVE 배지와 동일 톤)
+
   function updateTimerText(){
     var timer = document.getElementById('logTimer');
     var refId = activeSceneId || activeLotId || activeParkingId || activeRoadId;
     if (!refId) return;
     var log = logs.find(function(l){ return l.id === refId; });
     if (!log) return;
-    timer.textContent = formatDuration(Date.now() - log.startTime);
+    var elapsed = Date.now() - log.startTime;
+    timer.textContent = formatDuration(elapsed);
+
+    // 주차장 로깅 / 주차 로깅만 4분 리스타트 타이머 대상. 일반도로 로깅은 해당 없음.
+    var isRestartTimed = (log.type === 'parking_lot' || log.type === 'parking');
+    if (isRestartTimed){
+      var t = Math.min(elapsed / RESTART_LIMIT_MS, 1);
+      var rgb = [0, 1, 2].map(function(i){
+        return Math.round(TIMER_COLOR_FROM[i] + (TIMER_COLOR_TO[i] - TIMER_COLOR_FROM[i]) * t);
+      });
+      timer.style.color = 'rgb(' + rgb.join(',') + ')';
+      timer.classList.toggle('log-timer-overdue', elapsed >= RESTART_LIMIT_MS);
+    } else {
+      timer.style.color = '';
+      timer.classList.remove('log-timer-overdue');
+    }
   }
 
   var renamingId = null;
@@ -1900,7 +1915,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
     });
     document.getElementById('btnLot').addEventListener('click', function(){
       if (activeLotId){ stopLog('parking_lot'); return; }
-      openLabelModal('주차장 이름을 입력하세요', '', function(val){
+      var lastLotName = '';
+      try { lastLotName = localStorage.getItem('lastLotName') || ''; } catch(e){}
+      // 마지막으로 쓴 주차장 이름을 기본값으로 채워둠 — 같은 주차장이면 바로 "시작"만 누르면 되고,
+      // 다른 주차장으로 바뀌었으면 입력창이 자동 선택된 상태라 바로 새 이름을 타이핑해서 덮어쓰면 됨.
+      openLabelModal('주차장 이름을 입력하세요', lastLotName, function(val){
+        if (val){ try { localStorage.setItem('lastLotName', val); } catch(e){} }
         startLog('parking_lot', val);
       });
     });
@@ -1911,13 +1931,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
       var inherited = lastLot ? (lastLot.label + ' - 주차') : undefined;
       startLog('parking', inherited);
     });
-    document.getElementById('btnScene').addEventListener('click', function(){
-      if (activeSceneId){ stopLog('parking_scene'); return; }
-      var lotLog = logs.find(function(l){ return l.id === activeLotId; });
-      var inherited = lotLog ? (lotLog.label + ' - 주차씬') : undefined;
-      startLog('parking_scene', inherited);
-    });
-
     Array.prototype.forEach.call(document.querySelectorAll('.mnav-btn'), function(btn){
       btn.addEventListener('click', function(){
         setMobileView(btn.getAttribute('data-view'));
