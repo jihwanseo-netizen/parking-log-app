@@ -1568,7 +1568,10 @@
     } else {
       timer.style.display = 'none';
       var urgentTimer = document.getElementById('urgentTimer');
-      if (urgentTimer) urgentTimer.classList.remove('show');
+      // 'show'만 빼면 opacity가 0으로 트랜지션되어야 하는데, 4분 초과(overdue) 상태에서 걸린
+      // log-timer-overdue의 무한 pulse 애니메이션이 opacity를 계속 흔들어서 트랜지션을 이겨버리는
+      // 바람에 창이 안 사라지고 새로고침 전까지 계속 깜빡이며 남아있었음 — 같이 꺼줘야 한다.
+      if (urgentTimer){ urgentTimer.classList.remove('show'); urgentTimer.classList.remove('log-timer-overdue'); }
       if (timerInterval){ clearInterval(timerInterval); timerInterval = null; }
     }
   }
@@ -1607,6 +1610,7 @@
     } else {
       timer.style.color = '';
       timer.classList.remove('log-timer-overdue');
+      urgentTimer.classList.remove('log-timer-overdue');
     }
 
     // 3분 30초부터는 지도 화면 등 어느 탭에 있든 보이도록 화면 위쪽에 큰 숫자로 띄움
@@ -1614,7 +1618,10 @@
       urgentTimer.textContent = text;
       urgentTimer.classList.add('show');
     } else {
+      // log-timer-overdue의 무한 pulse 애니메이션이 켜진 채로 'show'만 빼면 opacity 트랜지션이
+      // 애니메이션한테 계속 밀려서 창이 안 사라지고 계속 깜빡인 채 남는다 — 같이 꺼줘야 진짜로 사라짐.
       urgentTimer.classList.remove('show');
+      urgentTimer.classList.remove('log-timer-overdue');
     }
   }
 
