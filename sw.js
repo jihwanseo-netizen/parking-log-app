@@ -4,10 +4,7 @@ var CACHE = 'parking-log-v1';
 var ASSETS = [
   './',
   './index.html',
-  './manifest.json',
-  './icons/apple-touch-icon.png',
-  './icons/icon-192.png',
-  './icons/icon-512.png'
+  './manifest.json'
 ];
 
 self.addEventListener('install', function(e){
