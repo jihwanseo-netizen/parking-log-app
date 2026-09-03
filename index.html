@@ -675,7 +675,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
 		}
 	}
 
-
   :root{
     --asphalt: #1A1C1F;
     --asphalt-2: #232629;
@@ -953,6 +952,28 @@ svg.leaflet-image-layer.leaflet-interactive path {
   .log-btn.on-scene{ background: var(--orange); border-color: var(--orange); color: #fff; }
   .log-sub{ margin-top: 8px; }
 
+  /* 일반도로 로깅 중에만 나타나는 SPECIAL/아이 이벤트 버튼 */
+  .event-btn-row{ margin-top: 8px; }
+  .event-btn.special{ background: #E5484D; border-color: #E5484D; color: #fff; }
+  .event-btn.child{ background: #2F6FED; border-color: #2F6FED; color: #fff; }
+  .event-btn:active{ opacity: 0.8; }
+
+  /* 하루 로깅 종료 & 리포트 버튼 — 시작/종료 버튼들과 헷갈리지 않도록 별도 스타일 */
+  .day-end-row{ margin-top: 10px; }
+  .day-end-btn{
+    width: 100%;
+    background: var(--yellow);
+    border: none;
+    color: #1A1C1F;
+    padding: 11px 8px;
+    border-radius: 8px;
+    font-weight: 800;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .day-end-btn:active{ opacity: 0.85; }
+
   /* ---------- Tabs ---------- */
   #tabs{
     display: flex;
@@ -1013,6 +1034,18 @@ svg.leaflet-image-layer.leaflet-interactive path {
     background: var(--asphalt); border: 1px solid var(--yellow);
     border-radius: 5px; color: var(--ink); padding: 2px 6px; width: 150px;
   }
+  .log-item-time-edit-row{
+    display: flex; align-items: center; gap: 6px;
+    margin-top: 4px;
+  }
+  .log-item-time-edit-row label{
+    font-size: 11px; color: var(--ink-dim); font-weight: 600; flex-shrink: 0;
+  }
+  .log-item-time-input{
+    font-size: 12px; font-family: inherit; color-scheme: dark;
+    background: var(--asphalt); border: 1px solid var(--yellow);
+    border-radius: 5px; color: var(--ink); padding: 2px 6px;
+  }
   .log-item-type-tag{
     font-size: 10px; font-weight: 700; color: var(--ink-dim);
     border: 1px solid var(--line); padding: 1px 6px; border-radius: 999px;
@@ -1053,6 +1086,36 @@ svg.leaflet-image-layer.leaflet-interactive path {
   }
   #modalBox input[type=text]:focus{ border-color: var(--yellow); }
   #modalBox .popup-actions{ margin-top: 14px; }
+  .modal-field-label{
+    display: block; font-size: 11px; color: var(--ink-dim);
+    margin: 10px 0 4px 0; font-weight: 600;
+  }
+  .modal-field-label:first-child{ margin-top: 0; }
+  .env-toggle{ display: flex; gap: 6px; }
+  .env-toggle-btn{
+    flex: 1; padding: 8px 0; background: transparent;
+    border: 1px solid var(--line); border-radius: 8px;
+    color: var(--ink-dim); font-size: 12.5px; font-weight: 700;
+    cursor: pointer; font-family: inherit;
+  }
+  .env-toggle-btn.active{ background: var(--yellow); border-color: var(--yellow); color: #1A1C1F; }
+
+  /* ---------- Toast (알림 배너) ---------- */
+  #toast{
+    position: fixed; left: 50%; bottom: 90px;
+    transform: translateX(-50%) translateY(20px);
+    background: rgba(20,20,22,0.95); color: #fff;
+    padding: 10px 16px; border-radius: 999px;
+    font-size: 13px; font-weight: 600;
+    opacity: 0; pointer-events: none;
+    transition: opacity .25s ease, transform .25s ease;
+    z-index: 3000; max-width: 86vw; text-align: center;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+  }
+  #toast.show{ opacity: 1; transform: translateX(-50%) translateY(0); }
+  @media (max-width: 760px){
+    #toast{ bottom: calc(64px + env(safe-area-inset-bottom) + 14px); }
+  }
 
   .live-dot-marker{
     width: 14px; height: 14px; border-radius: 50%;
@@ -1162,6 +1225,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
     #hint{ padding-bottom: max(16px, calc(env(safe-area-inset-bottom) + 10px)); }
   }
 
+
 </style>
 </head>
 <body>
@@ -1197,7 +1261,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <button class="log-btn" id="btnLot">주차장 로깅 시작</button>
         <button class="log-btn" id="btnParking">주차 로깅 시작</button>
       </div>
+      <div class="log-btn-row event-btn-row" id="eventBtnRow" style="display:none;">
+        <button class="log-btn event-btn special" id="btnSpecial">⚠ SPECIAL</button>
+        <button class="log-btn event-btn child" id="btnChild">🧒 아이</button>
+      </div>
       <div class="geo-status" id="geoStatus" style="display:none;"></div>
+      <div class="day-end-row">
+        <button class="day-end-btn" id="btnDayEnd">📋 오늘 로깅 종료 · 리포트 보내기</button>
+      </div>
     </div>
     <div id="tabs">
       <button class="tab-btn active" data-tab="spots">장소 체크리스트</button>
@@ -1226,6 +1297,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <button class="mnav-btn" data-view="spots">장소 체크리스트</button>
     <button class="mnav-btn" data-view="logs">로깅 기록</button>
   </div>
+  <div id="toast"></div>
 </div>
 <script>
 /* @preserve
@@ -1283,6 +1355,19 @@ svg.leaflet-image-layer.leaflet-interactive path {
   };
   var DEFAULT_LABEL = { road: '일반도로', parking_lot: '주차장', parking: '주차 로깅', parking_scene: '주차씬' };
 
+  // ---- 일일 리포트(엑셀) 관련 매핑 ----
+  // 시나리오: 일반도로 로깅은 "주행", 주차장/주차 로깅은 모두 "주차"로 합쳐서 표기
+  var LOG_SCENARIO = { road: '주행', parking_lot: '주차', parking: '주차', parking_scene: '주차' };
+  // 목표 대상: 로깅 유형별 고정 문구 (실제 SPECIAL/아이 버튼 기록 횟수는 별도 컬럼에 표기)
+  var LOG_TARGET = {
+    road: '특수차량 / 어린이 / PM',
+    parking_lot: '특이입구점 / 어린이',
+    parking: '특이입구점 / 어린이',
+    parking_scene: '특이입구점 / 어린이'
+  };
+  // 비고: 주차장 로깅(주행하며 스캔) vs 주차 로깅(정차해서 스캔) 구분용. 일반도로는 비워둠.
+  var LOG_REMARK = { parking_lot: '주차장 주행 로깅', parking: '주차장 주차 로깅' };
+
   /* ---------- Modal ---------- */
   function openModal(html){
     document.getElementById('modalBox').innerHTML = html;
@@ -1293,21 +1378,63 @@ svg.leaflet-image-layer.leaflet-interactive path {
     document.getElementById('modalBox').innerHTML = '';
   }
   var modalOnSave = null;
-  function openLabelModal(title, defaultVal, onSave){
-    modalOnSave = onSave;
+  var modalEnvChoice = 'road'; // 로깅 시작 모달에서 고른 환경: 'road'(일반도로) | 'highway'(고속도로)
+
+  // 로깅 시작 모달. 이름 입력(주차장)과 환경 선택(일반도로/고속도로 — 일반도로 로깅에만 해당)을
+  // 필요한 경우에만 보여주고, SSD 번호는 모든 로깅 시작 시 항상 물어봄(직전 값이 자동으로 채워짐).
+  function openStartModal(config, onConfirm){
+    modalOnSave = onConfirm;
+    modalEnvChoice = 'road';
+    var nameField = config.showName
+      ? '<label class="modal-field-label">이름</label>' +
+        '<input type="text" id="modalInput" value="' + escapeHtml(config.nameDefault || '') + '" placeholder="예: 강남파이낸스센터 주차장" />'
+      : '';
+    var envField = config.showEnv
+      ? '<label class="modal-field-label">환경</label>' +
+        '<div class="env-toggle" id="envToggle">' +
+          '<button type="button" class="env-toggle-btn active" data-env="road">일반도로</button>' +
+          '<button type="button" class="env-toggle-btn" data-env="highway">고속도로</button>' +
+        '</div>'
+      : '';
+    var lastSSD = '';
+    try { lastSSD = localStorage.getItem('lastSSD') || ''; } catch(e){}
     openModal(
-      '<h3>' + title + '</h3>' +
-      '<p>나중에 목록에서 언제든 이름을 다시 바꿀 수 있어요.</p>' +
-      '<input type="text" id="modalInput" value="' + escapeHtml(defaultVal || '') + '" placeholder="예: 강남파이낸스센터 주차장" />' +
+      '<h3>' + config.title + '</h3>' +
+      nameField +
+      envField +
+      '<label class="modal-field-label">SSD 번호</label>' +
+      '<input type="text" id="modalSsdInput" value="' + escapeHtml(lastSSD) + '" placeholder="예: SSD-01" />' +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
         '<button class="btn-primary" onclick="AppMap.confirmModal()">시작</button>' +
       '</div>'
     );
+    if (config.showEnv){
+      var row = document.getElementById('envToggle');
+      if (row){
+        Array.prototype.forEach.call(row.querySelectorAll('.env-toggle-btn'), function(btn){
+          btn.addEventListener('click', function(){
+            Array.prototype.forEach.call(row.querySelectorAll('.env-toggle-btn'), function(b){ b.classList.remove('active'); });
+            btn.classList.add('active');
+            modalEnvChoice = btn.getAttribute('data-env');
+          });
+        });
+      }
+    }
     setTimeout(function(){
-      var el = document.getElementById('modalInput');
+      var el = document.getElementById(config.showName ? 'modalInput' : 'modalSsdInput');
       if (el){ el.focus(); el.select(); }
     }, 30);
+  }
+
+  var toastTimer = null;
+  function showToast(msg, ms){
+    var el = document.getElementById('toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ el.classList.remove('show'); }, ms || 1800);
   }
 
   function pad(n, len){ len = len || 2; return String(n).padStart(len, '0'); }
@@ -1497,13 +1624,20 @@ svg.leaflet-image-layer.leaflet-interactive path {
   }
 
   /* ---------- Logging ---------- */
-  function startLog(type, label){
+  function startLog(type, label, extra){
+    extra = extra || {};
     var log = {
       id: 'lg_' + Date.now() + '_' + Math.floor(Math.random()*1000),
       type: type,
       label: (label && label.trim()) ? label.trim() : DEFAULT_LABEL[type],
       startTime: Date.now(),
-      endTime: null
+      endTime: null,
+      ssd: extra.ssd || '',
+      highway: !!extra.highway,   // 일반도로 로깅에서만 의미 있음(환경: 일반도로/고속도로)
+      startLat: null,
+      startLng: null,
+      address: '',                // 시작 지점 주소 (역지오코딩으로 나중에 채워짐)
+      events: []                  // 일반도로 로깅 중 SPECIAL/아이 버튼 탭 기록 {type, time}
     };
     if (type === 'road') log.path = [];
     logs.push(log);
@@ -1514,7 +1648,37 @@ svg.leaflet-image-layer.leaflet-interactive path {
     saveLogs();
     renderLogPanel();
     renderLogList();
+    captureStartLocation(log);
     if (type === 'road') focusOnLog(log.id, true);
+  }
+
+  // 로깅 시작 지점의 GPS를 한 번만 찍어서, 리포트에 넣을 "주소"로 역지오코딩한다.
+  // (일반도로 로깅의 계속되는 경로 추적(watchPosition)과는 별개의, 시작 시점 단발성 위치 확인)
+  function captureStartLocation(log){
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(function(pos){
+      log.startLat = pos.coords.latitude;
+      log.startLng = pos.coords.longitude;
+      saveLogs();
+      reverseGeocodeStart(log);
+    }, function(){
+      // 위치 권한 거부/실패 — 로깅 자체는 계속 진행하고, 리포트의 주소 칸은 비워둠
+    }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 });
+  }
+  function reverseGeocodeStart(log){
+    // 무료 OpenStreetMap Nominatim 역지오코딩 (API 키 불필요). 오프라인/실패 시 조용히 넘어감 —
+    // 그래도 좌표는 저장돼 있으니 리포트에는 좌표라도 표시됨.
+    var url = 'https://nominatim.openstreetmap.org/reverse?format=json&lat=' + log.startLat + '&lon=' + log.startLng + '&zoom=18&addressdetails=0';
+    fetch(url, { headers: { 'Accept-Language': 'ko' } })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(data){
+        if (data && data.display_name){
+          log.address = data.display_name;
+          saveLogs();
+          if (activeTab === 'logs') renderLogList();
+        }
+      })
+      .catch(function(){ /* 오프라인 등 — 무시 */ });
   }
   function stopLog(type){
     var id = type === 'road' ? activeRoadId : type === 'parking_lot' ? activeLotId : type === 'parking' ? activeParkingId : activeSceneId;
@@ -1625,6 +1789,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
     btnParking.className = 'log-btn' + (activeParkingId ? ' on-parking' : '');
     btnParking.disabled = !!(activeRoadId || activeLotId);
 
+    // SPECIAL/아이 버튼은 어떤 로깅이든(일반도로/주차장/주차) 진행 중이면 노출
+    var eventBtnRow = document.getElementById('eventBtnRow');
+    if (eventBtnRow) eventBtnRow.style.display = anyActive ? 'flex' : 'none';
+
     if (activeSceneId){
       dot.className = 'log-status-dot on';
       text.textContent = '주차씬 로깅 중';
@@ -1685,6 +1853,100 @@ svg.leaflet-image-layer.leaflet-interactive path {
     }
   }
 
+  function toLocalInputValue(ms){
+    var d = new Date(ms);
+    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  function fromLocalInputValue(str){
+    if (!str) return null;
+    var t = new Date(str).getTime();
+    return isNaN(t) ? null : t;
+  }
+
+  /* ---------- 일일 리포트 (CSV) ---------- */
+  function formatYYYYMMDD(ms){
+    var d = new Date(ms);
+    return '' + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate());
+  }
+  function formatHM(ms){
+    var d = new Date(ms);
+    return pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function formatDurationHM(ms){
+    // 예: 09:00~10:00 -> "1:00" (시간은 앞에 0을 붙이지 않음)
+    var totalMin = Math.round(ms / 60000);
+    var h = Math.floor(totalMin / 60);
+    var m = totalMin % 60;
+    return h + ':' + pad(m);
+  }
+  function csvEscape(v){
+    var s = (v === null || v === undefined) ? '' : String(v);
+    if (/[",\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+  var REPORT_HEADER = ['시나리오','취득일','SSD','위치','주소','환경','취득 시작시간','취득 종료시간','취득 시간','목표 대상','비고','SPECIAL','아이'];
+  function buildReportRows(dayLogs){
+    var rows = dayLogs.map(function(l){
+      var isRoad = l.type === 'road';
+      var env = isRoad ? (l.highway ? '고속도로' : '일반도로') : '주차장';
+      var events = l.events || [];
+      var specialCount = events.filter(function(e){ return e.type === 'special'; }).length;
+      var childCount = events.filter(function(e){ return e.type === 'child'; }).length;
+      var addressOrCoord = l.address || ((l.startLat != null) ? (l.startLat.toFixed(6) + ',' + l.startLng.toFixed(6)) : '');
+      return [
+        LOG_SCENARIO[l.type] || '',
+        formatYYYYMMDD(l.startTime),
+        l.ssd || '',
+        l.label || '',
+        addressOrCoord,
+        env,
+        formatHM(l.startTime),
+        l.endTime ? formatHM(l.endTime) : '',
+        l.endTime ? formatDurationHM(l.endTime - l.startTime) : '',
+        LOG_TARGET[l.type] || '',
+        isRoad ? '' : (LOG_REMARK[l.type] || ''),
+        String(specialCount),
+        String(childCount)
+      ];
+    });
+    return [REPORT_HEADER].concat(rows);
+  }
+  function rowsToCsv(rows){
+    // 앞에 BOM을 붙여야 엑셀에서 한글이 깨지지 않음
+    return '﻿' + rows.map(function(r){ return r.map(csvEscape).join(','); }).join('\r\n');
+  }
+  function shareOrDownloadReport(){
+    if (activeRoadId || activeLotId || activeParkingId){
+      showToast('아직 진행 중인 로깅이 있어요. 먼저 종료해주세요.');
+      return;
+    }
+    var todayStr = formatYYYYMMDD(Date.now());
+    var dayLogs = logs.filter(function(l){ return l.endTime && formatYYYYMMDD(l.startTime) === todayStr; })
+      .sort(function(a,b){ return a.startTime - b.startTime; });
+    if (dayLogs.length === 0){
+      showToast('오늘 완료된 로깅 기록이 없어요.');
+      return;
+    }
+    var csv = rowsToCsv(buildReportRows(dayLogs));
+    var fileName = '로깅기록_' + todayStr + '.csv';
+    var file = new File([csv], fileName, { type: 'text/csv' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })){
+      navigator.share({
+        files: [file],
+        title: '로깅 리포트 ' + todayStr,
+        text: '오늘 로깅 리포트예요. 메일 앱에서 받는사람에 본인 메일 주소를 입력해 보내주세요.'
+      }).catch(function(){ /* 사용자가 공유 시트를 취소한 경우 — 아무 것도 안 함 */ });
+    } else {
+      // 공유 시트를 지원하지 않는 환경(데스크톱 등)을 위한 대체: 그냥 파일 다운로드
+      var url = URL.createObjectURL(file);
+      var a = document.createElement('a');
+      a.href = url; a.download = fileName;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+      showToast('리포트 파일을 다운로드했어요.');
+    }
+  }
+
   var renamingId = null;
   function renderLogList(){
     var list = document.getElementById('list');
@@ -1698,9 +1960,26 @@ svg.leaflet-image-layer.leaflet-interactive path {
       var live = !l.endTime;
       var endText = live ? '진행 중' : formatDateTime(l.endTime);
       var durMs = (live ? Date.now() : l.endTime) - l.startTime;
-      var nameHtml = renamingId === l.id
+      var editing = renamingId === l.id;
+      var nameHtml = editing
         ? '<input class="log-item-name-input" id="renameInput" value="' + escapeHtml(l.label) + '" />'
         : '<span class="log-item-name">' + escapeHtml(l.label) + '</span>';
+      var timesHtml = editing
+        ? (
+            '<div class="log-item-time-edit-row">' +
+              '<label>시작</label>' +
+              '<input type="datetime-local" step="1" class="log-item-time-input" id="renameStartInput" value="' + toLocalInputValue(l.startTime) + '" />' +
+            '</div>' +
+            (live ? '' :
+            '<div class="log-item-time-edit-row">' +
+              '<label>종료</label>' +
+              '<input type="datetime-local" step="1" class="log-item-time-input" id="renameEndInput" value="' + toLocalInputValue(l.endTime) + '" />' +
+            '</div>')
+          )
+        : (
+            '<div class="log-item-times">시작 ' + formatDateTime(l.startTime) + '</div>' +
+            '<div class="log-item-times">종료 ' + endText + '</div>'
+          );
       return '<div class="log-item">' +
         '<span class="log-type-dot" style="background:' + meta.color + '"></span>' +
         '<div class="log-item-body">' +
@@ -1709,8 +1988,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
             '<span class="log-item-type-tag">' + meta.label + '</span>' +
             (live ? '<span class="log-item-live">LIVE</span>' : '') +
           '</div>' +
-          '<div class="log-item-times">시작 ' + formatDateTime(l.startTime) + '</div>' +
-          '<div class="log-item-times">종료 ' + endText + '</div>' +
+          timesHtml +
           '<div class="log-item-dur">소요 시간 ' + formatDuration(durMs) + '</div>' +
         '</div>' +
         (renamingId === l.id
@@ -1721,14 +1999,15 @@ svg.leaflet-image-layer.leaflet-interactive path {
     }).join('');
     if (renamingId){
       var input = document.getElementById('renameInput');
-      if (input){
-        input.focus();
-        input.select();
-        input.addEventListener('keydown', function(e){
+      var editInputs = [input, document.getElementById('renameStartInput'), document.getElementById('renameEndInput')];
+      editInputs.forEach(function(el){
+        if (!el) return;
+        el.addEventListener('keydown', function(e){
           if (e.key === 'Enter') AppMap.confirmRename(renamingId);
           if (e.key === 'Escape'){ renamingId = null; renderLogList(); }
         });
-      }
+      });
+      if (input){ input.focus(); input.select(); }
     }
   }
 
@@ -1767,10 +2046,24 @@ svg.leaflet-image-layer.leaflet-interactive path {
     },
     confirmRename: function(id){
       var input = document.getElementById('renameInput');
+      var startInput = document.getElementById('renameStartInput');
+      var endInput = document.getElementById('renameEndInput');
       var log = logs.find(function(l){ return l.id === id; });
-      if (log && input){
-        var val = input.value.trim();
-        if (val) log.label = val;
+      if (log){
+        if (input){
+          var val = input.value.trim();
+          if (val) log.label = val;
+        }
+        var newStart = startInput ? fromLocalInputValue(startInput.value) : null;
+        var newEnd = endInput ? fromLocalInputValue(endInput.value) : null;
+        var candidateStart = (newStart !== null) ? newStart : log.startTime;
+        var candidateEnd = endInput ? ((newEnd !== null) ? newEnd : log.endTime) : log.endTime;
+        // 종료가 시작보다 앞서는 등 앞뒤가 안 맞으면 그냥 무시하고 기존 시간을 유지
+        var rangeOk = (candidateEnd === null || candidateEnd === undefined) || candidateStart < candidateEnd;
+        if (rangeOk){
+          log.startTime = candidateStart;
+          if (endInput) log.endTime = candidateEnd;
+        }
       }
       renamingId = null;
       saveLogs();
@@ -1781,12 +2074,28 @@ svg.leaflet-image-layer.leaflet-interactive path {
       closeModal();
     },
     confirmModal: function(){
-      var input = document.getElementById('modalInput');
-      var val = input ? input.value.trim() : '';
+      var nameEl = document.getElementById('modalInput');
+      var ssdEl = document.getElementById('modalSsdInput');
+      var result = {
+        name: nameEl ? nameEl.value.trim() : '',
+        ssd: ssdEl ? ssdEl.value.trim() : '',
+        highway: modalEnvChoice === 'highway'
+      };
       var cb = modalOnSave;
       modalOnSave = null;
       closeModal();
-      if (cb) cb(val);
+      if (cb) cb(result);
+    },
+    tapEvent: function(kind){
+      // 지금 진행 중인 로깅(일반도로/주차장/주차 중 켜져 있는 것)에 기록
+      var activeId = activeRoadId || activeLotId || activeParkingId;
+      if (!activeId) return;
+      var log = logs.find(function(l){ return l.id === activeId; });
+      if (!log) return;
+      if (!log.events) log.events = [];
+      log.events.push({ type: kind, time: Date.now() });
+      saveLogs();
+      showToast(kind === 'special' ? '⚠ SPECIAL 기록됨' : '🧒 아이 기록됨', 1200);
     },
     startEdit: function(id){
       var spot = spots.find(function(s){ return s.id === id; });
@@ -1911,7 +2220,13 @@ svg.leaflet-image-layer.leaflet-interactive path {
     });
 
     document.getElementById('btnRoad').addEventListener('click', function(){
-      activeRoadId ? stopLog('road') : startLog('road');
+      if (activeRoadId){ stopLog('road'); return; }
+      // SSD 번호는 직전 값이 자동으로 채워지고 선택돼 있어서, 안 바뀌었으면 그냥 "시작"만 누르면 됨.
+      // 환경(일반도로/고속도로)도 기본값(일반도로)이 이미 선택돼 있어 한 번의 탭으로 시작 가능.
+      openStartModal({ title: '일반도로 로깅 시작', showName: false, showEnv: true }, function(res){
+        if (res.ssd){ try { localStorage.setItem('lastSSD', res.ssd); } catch(e){} }
+        startLog('road', null, { ssd: res.ssd, highway: res.highway });
+      });
     });
     document.getElementById('btnLot').addEventListener('click', function(){
       if (activeLotId){ stopLog('parking_lot'); return; }
@@ -1919,17 +2234,30 @@ svg.leaflet-image-layer.leaflet-interactive path {
       try { lastLotName = localStorage.getItem('lastLotName') || ''; } catch(e){}
       // 마지막으로 쓴 주차장 이름을 기본값으로 채워둠 — 같은 주차장이면 바로 "시작"만 누르면 되고,
       // 다른 주차장으로 바뀌었으면 입력창이 자동 선택된 상태라 바로 새 이름을 타이핑해서 덮어쓰면 됨.
-      openLabelModal('주차장 이름을 입력하세요', lastLotName, function(val){
-        if (val){ try { localStorage.setItem('lastLotName', val); } catch(e){} }
-        startLog('parking_lot', val);
+      openStartModal({ title: '주차장 로깅 시작', showName: true, nameDefault: lastLotName, showEnv: false }, function(res){
+        if (res.name){ try { localStorage.setItem('lastLotName', res.name); } catch(e){} }
+        if (res.ssd){ try { localStorage.setItem('lastSSD', res.ssd); } catch(e){} }
+        startLog('parking_lot', res.name, { ssd: res.ssd });
       });
     });
     document.getElementById('btnParking').addEventListener('click', function(){
       if (activeParkingId){ stopLog('parking'); return; }
+      // 주차 로깅은 직전 주차장 로깅에서 이름과 SSD 번호를 그대로 물려받아서, 모달 없이 바로 시작됨
+      // (같은 주차장 안에서 이어지는 작업이라 SSD를 다시 물어보면 불필요한 조작이 늘어나기 때문).
       var lastLot = logs.filter(function(l){ return l.type === 'parking_lot' && l.endTime; })
         .sort(function(a,b){ return b.endTime - a.endTime; })[0];
       var inherited = lastLot ? (lastLot.label + ' - 주차') : undefined;
-      startLog('parking', inherited);
+      var inheritedSsd = lastLot ? lastLot.ssd : undefined;
+      startLog('parking', inherited, { ssd: inheritedSsd });
+    });
+    document.getElementById('btnSpecial').addEventListener('click', function(){
+      AppMap.tapEvent('special');
+    });
+    document.getElementById('btnChild').addEventListener('click', function(){
+      AppMap.tapEvent('child');
+    });
+    document.getElementById('btnDayEnd').addEventListener('click', function(){
+      shareOrDownloadReport();
     });
     Array.prototype.forEach.call(document.querySelectorAll('.mnav-btn'), function(btn){
       btn.addEventListener('click', function(){
