@@ -759,6 +759,20 @@ svg.leaflet-image-layer.leaflet-interactive path {
     white-space: nowrap;
   }
   .sync-status-btn.linked{ border-color: #12A594; color: #12A594; }
+  .log-history-toggle{
+    display: block;
+    width: 100%;
+    margin: 4px 0 10px 0;
+    padding: 8px 0;
+    background: transparent;
+    border: 1px dashed var(--line);
+    border-radius: 999px;
+    color: var(--ink-dim);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+  }
   #stats{
     display: flex;
     gap: 8px;
@@ -2050,6 +2064,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
     }
   }
 
+  var LOG_LIST_HIDE_AFTER_MS = 10 * 60 * 60 * 1000; // 완료된 로깅 기록은 10시간 지나면 목록에서 기본적으로 숨김(데이터는 보존)
   var RESTART_LIMIT_MS = 4 * 60 * 1000; // 주차장/주차 로깅은 4분 안에 끊었다가 다시 시작해야 함
   var URGENT_LEAD_MS = 30 * 1000;       // 제한 30초 전(3분 30초)부터 큰 타이머로 강조
   var TIMER_COLOR_FROM = [244, 242, 236]; // var(--ink)
@@ -2189,14 +2204,28 @@ svg.leaflet-image-layer.leaflet-interactive path {
   }
 
   var renamingId = null;
+  var showAllLogs = false; // 기본은 최근 10시간 기록만; 눌러서 지난 기록도 볼 수 있음
   function renderLogList(){
     var list = document.getElementById('list');
-    var sorted = logs.slice().sort(function(a,b){ return b.startTime - a.startTime; });
+    var now = Date.now();
+    // 완료된 지 10시간이 지난 기록은 목록을 깔끔하게 유지하려고 기본적으로 숨김.
+    // 데이터 자체는 지우지 않으므로 리포트 생성에는 영향 없고, "지난 기록 보기"로 언제든 다시 볼 수 있음.
+    var isRecent = function(l){ return !l.endTime || (now - l.endTime) <= LOG_LIST_HIDE_AFTER_MS; };
+    var hiddenCount = logs.filter(function(l){ return !isRecent(l); }).length;
+    var base = showAllLogs ? logs : logs.filter(isRecent);
+    var sorted = base.slice().sort(function(a,b){ return b.startTime - a.startTime; });
+    var toggleHtml = hiddenCount > 0
+      ? '<button class="log-history-toggle" onclick="AppMap.toggleShowAllLogs()">' +
+          (showAllLogs ? '최근 기록만 보기' : '지난 기록 보기 (' + hiddenCount + '건)') +
+        '</button>'
+      : '';
     if (sorted.length === 0){
-      list.innerHTML = '<div id="empty">아직 로깅 기록이 없어요.<br/>위 버튼으로 로깅을 시작해보세요.</div>';
+      list.innerHTML = toggleHtml + '<div id="empty">' +
+        (hiddenCount > 0 ? '최근 10시간 내 기록이 없어요.' : '아직 로깅 기록이 없어요.<br/>위 버튼으로 로깅을 시작해보세요.') +
+        '</div>';
       return;
     }
-    list.innerHTML = sorted.map(function(l){
+    list.innerHTML = toggleHtml + sorted.map(function(l){
       var meta = LOG_META[l.type];
       var live = !l.endTime;
       var endText = live ? '진행 중' : formatDateTime(l.endTime);
@@ -2284,6 +2313,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
     },
     startRename: function(id){
       renamingId = id;
+      renderLogList();
+    },
+    toggleShowAllLogs: function(){
+      showAllLogs = !showAllLogs;
       renderLogList();
     },
     confirmRename: function(id){
@@ -2549,6 +2582,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
       try { alreadyPrompted = localStorage.getItem(TEAM_CODE_PROMPTED_KEY) === '1'; } catch(e){}
       if (!alreadyPrompted) setTimeout(openTeamCodeModal, 400);
     }
+
+    // 완료된 로깅이 10시간 경과선을 넘는 순간 목록에서 자동으로 정리되도록 주기적으로 갱신
+    // (데이터 삭제 아님 — 화면 표시만 갱신, "지난 기록 보기"로 언제든 다시 볼 수 있음)
+    setInterval(function(){
+      if (activeTab === 'logs') renderLogList();
+    }, 5 * 60 * 1000);
   })();
 })();
 
