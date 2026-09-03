@@ -244,6 +244,20 @@
     flex-shrink: 0;
   }
   .item-del:hover{ color: #E5484D; }
+  .item-force-stop{
+    background: none;
+    border: 1px solid #D9731D;
+    color: #D9731D;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 7px;
+    border-radius: 999px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .item-force-stop:hover{ background: #D9731D; color: #1A1C1F; }
   #empty{
     padding: 30px 16px;
     text-align: center;
@@ -318,7 +332,7 @@
     cursor: pointer;
     font-family: inherit;
   }
-  .log-btn:disabled{ opacity: 0.3; cursor: not-allowed; }
+  .log-btn:disabled, .log-btn.blocked{ opacity: 0.3; cursor: not-allowed; }
   .log-btn.on-road{ background: var(--blue); border-color: var(--blue); color: #fff; }
   .log-btn.on-lot{ background: #12A594; border-color: #12A594; color: #fff; }
   .log-btn.on-parking{ background: #8B5FBF; border-color: #8B5FBF; color: #fff; }
@@ -813,7 +827,8 @@
   var TEAM_CODE_PROMPTED_KEY = 'teamCodePrompted';
   var teamCode = null;
   var db = null;
-  var roomRef = null;
+  var roomRef = null;       // rooms/{teamCode}/logs
+  var spotsRoomRef = null;  // rooms/{teamCode}/spots
   var cloudReady = false;
   try { teamCode = localStorage.getItem(TEAM_CODE_KEY) || null; } catch(e){}
 
@@ -982,9 +997,12 @@
       db = firebase.firestore();
       try { db.enablePersistence({ synchronizeTabs: true }).catch(function(){}); } catch(e2){}
       roomRef = db.collection('rooms').doc(teamCode).collection('logs');
+      spotsRoomRef = db.collection('rooms').doc(teamCode).collection('spots');
       cloudReady = true;
       subscribeToCloudLogs();
       migrateLocalLogsToCloud();
+      subscribeToCloudSpots();
+      migrateLocalSpotsToCloud();
     }catch(e){
       cloudReady = false;
     }
@@ -1054,6 +1072,66 @@
     if (!cloudReady || !roomRef) return;
     roomRef.doc(id).delete().catch(function(){});
   }
+
+  /* ---------- 여러 폰 간 장소 체크리스트 실시간 공유 ---------- */
+  function subscribeToCloudSpots(){
+    if (!spotsRoomRef) return;
+    spotsRoomRef.onSnapshot(function(snapshot){
+      snapshot.docChanges().forEach(function(change){
+        var id = change.doc.id;
+        if (change.type === 'removed'){
+          spots = spots.filter(function(s){ return s.id !== id; });
+          if (currentPopupSpotId === id) closeMapPopup();
+          return;
+        }
+        var data = change.doc.data();
+        data.id = id;
+        var idx = spots.findIndex(function(s){ return s.id === id; });
+        if (idx >= 0) spots[idx] = data; else spots.push(data);
+      });
+      renderAll();
+      // 지금 열려서 보고 있는 장소 팝업이 다른 폰에서 방금 바뀐 거면(방문완료 체크 등) 내용도 새로 고침.
+      // 수정 폼을 입력 중(editingId)이면 덮어써서 입력 내용을 날리지 않도록 건드리지 않는다.
+      if (currentPopupSpotId && !editingId){
+        var openSpot = spots.find(function(s){ return s.id === currentPopupSpotId; });
+        if (openSpot) updateMapPopupContent(viewPopupHtml(openSpot));
+      }
+    }, function(err){
+      showToast('장소 체크리스트 동기화 연결에 문제가 있어요. 팀 코드를 확인해주세요.');
+    });
+  }
+  function migrateLocalSpotsToCloud(){
+    // 로깅 동기화 때와 마찬가지로, 팀 코드 설정 후 이 기기에 있던 기존 장소들을 한 번만 클라우드로
+    // 올린다. 로깅 마이그레이션과 별도 플래그를 써서, 이미 로깅 동기화를 쓰고 있던 기기에서도
+    // 장소 체크리스트 마이그레이션이 한 번은 새로 실행되게 한다.
+    var flagKey = 'migratedSpotsToCloud_' + teamCode;
+    var already = false;
+    try { already = localStorage.getItem(flagKey) === '1'; } catch(e){}
+    if (already || !spotsRoomRef) return;
+    spots.forEach(function(s){ pushSpotToCloud(s); });
+    try { localStorage.setItem(flagKey, '1'); } catch(e){}
+  }
+  function toCloudSafeSpot(spot){
+    var copy = {};
+    for (var k in spot){
+      if (!Object.prototype.hasOwnProperty.call(spot, k)) continue;
+      var v = spot[k];
+      if (v === undefined) continue;
+      copy[k] = v;
+    }
+    return copy;
+  }
+  function pushSpotToCloud(spot){
+    if (!cloudReady || !spotsRoomRef || !spot) return;
+    spotsRoomRef.doc(spot.id).set(toCloudSafeSpot(spot), { merge: true }).catch(function(){
+      showToast('장소 동기화 저장에 실패했어요. 팀 코드를 확인해주세요.');
+    });
+  }
+  function deleteSpotFromCloud(id){
+    if (!cloudReady || !spotsRoomRef) return;
+    spotsRoomRef.doc(id).delete().catch(function(){});
+  }
+
   function updateSyncStatusButton(){
     var btn = document.getElementById('syncStatusBtn');
     if (!btn) return;
@@ -1068,7 +1146,7 @@
   function openTeamCodeModal(){
     openModal(
       '<h3>팀 코드 입력</h3>' +
-      '<p>같이 로깅하는 폰끼리 같은 코드를 입력하면, 진행 중인 로깅을 서로 실시간으로 보고 이어받을 수 있어요. 안 써도 이 기기 안에서는 그대로 사용 가능해요.</p>' +
+      '<p>같이 다니는 폰끼리 같은 코드를 입력하면, 로깅 기록과 장소 체크리스트를 서로 실시간으로 보고 이어받을 수 있어요. 안 써도 이 기기 안에서는 그대로 사용 가능해요.</p>' +
       '<input type="text" id="teamCodeInput" value="' + escapeHtml(teamCode || '') + '" placeholder="예: RS" />' +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" onclick="AppMap.skipTeamCode()">나중에</button>' +
@@ -1438,20 +1516,24 @@
 
     var anyActive = activeRoadId || activeLotId || activeParkingId;
 
+    // 다른 종류가 진행 중이면 이 버튼은 눌러도 시작이 안 되는 상태.
+    // 예전엔 이걸 그냥 HTML disabled로 막아서 눌러도 "아무 반응 없음"으로 보였는데(혼란의 원인),
+    // 지금은 disabled를 안 걸고 클릭 핸들러 쪽에서 이유를 토스트로 알려준다 — 시각적으로만 흐리게.
+
     // road button
+    var roadBlocked = !!(activeLotId || activeParkingId);
     btnRoad.textContent = activeRoadId ? '일반도로 로깅 종료' : '일반도로 로깅 시작';
-    btnRoad.className = 'log-btn' + (activeRoadId ? ' on-road' : '');
-    btnRoad.disabled = !!(activeLotId || activeParkingId);
+    btnRoad.className = 'log-btn' + (activeRoadId ? ' on-road' : '') + (roadBlocked ? ' blocked' : '');
 
     // lot button
+    var lotBlocked = !!(activeRoadId || activeParkingId);
     btnLot.textContent = activeLotId ? '주차장 로깅 종료' : '주차장 로깅 시작';
-    btnLot.className = 'log-btn' + (activeLotId ? ' on-lot' : '');
-    btnLot.disabled = !!(activeRoadId || activeParkingId);
+    btnLot.className = 'log-btn' + (activeLotId ? ' on-lot' : '') + (lotBlocked ? ' blocked' : '');
 
     // parking button (available right after a 주차장 로깅 session, or any time nothing else is active)
+    var parkingBlocked = !!(activeRoadId || activeLotId);
     btnParking.textContent = activeParkingId ? '주차 로깅 종료' : '주차 로깅 시작';
-    btnParking.className = 'log-btn' + (activeParkingId ? ' on-parking' : '');
-    btnParking.disabled = !!(activeRoadId || activeLotId);
+    btnParking.className = 'log-btn' + (activeParkingId ? ' on-parking' : '') + (parkingBlocked ? ' blocked' : '');
 
     // SPECIAL/아이 버튼은 어떤 로깅이든(일반도로/주차장/주차) 진행 중이면 노출
     var eventBtnRow = document.getElementById('eventBtnRow');
@@ -1691,7 +1773,9 @@
         (renamingId === l.id
           ? '<button class="log-item-edit" onclick="AppMap.confirmRename(\'' + l.id + '\')">✓</button>'
           : '<button class="log-item-edit" onclick="AppMap.startRename(\'' + l.id + '\')">✎</button>') +
-        (live ? '' : '<button class="item-del" onclick="AppMap.deleteLog(\'' + l.id + '\')">&times;</button>') +
+        (live
+          ? '<button class="item-force-stop" onclick="AppMap.forceStopLog(\'' + l.id + '\')" title="다른 기기에서 끝내지 않고 남은 로깅을 지금 이 시각으로 강제 종료">강제종료</button>'
+          : '<button class="item-del" onclick="AppMap.deleteLog(\'' + l.id + '\')">&times;</button>') +
       '</div>';
     }).join('');
     if (renamingId){
@@ -1728,6 +1812,7 @@
       if (!spot) return;
       spot.visited = !spot.visited;
       saveSpots();
+      pushSpotToCloud(spot);
       renderAll();
       AppMap.openSpotPopup(id);
     },
@@ -1735,14 +1820,35 @@
       if (currentPopupSpotId === id) closeMapPopup();
       spots = spots.filter(function(s){ return s.id !== id; });
       saveSpots();
+      deleteSpotFromCloud(id);
       renderAll();
     },
     deleteLog: function(id){
       if (roadPolylines[id]){ roadPolylines[id].setMap(null); delete roadPolylines[id]; }
+      var wasActiveRoad = (activeRoadId === id);
       logs = logs.filter(function(l){ return l.id !== id; });
+      if (wasActiveRoad) stopRoadTracking();
       saveLogs();
       deleteLogFromCloud(id);
+      recomputeActiveIds();
+      renderLogPanel();
       renderLogList();
+    },
+    // 다른 기기(또는 이 기기)에서 시작만 해두고 "종료"를 못 눌러서 계속 진행 중으로 남아있는 로깅을
+    // 지금 이 시각으로 강제 종료한다. 이렇게 멈춘 채로 남은 로깅이 하나라도 있으면, 그 종류가
+    // 겹쳐서 다른 로깅 시작/종료 버튼까지 같이 눌리지 않게 되는데, 그럴 때 여기서 풀어주면 된다.
+    forceStopLog: function(id){
+      var log = logs.find(function(l){ return l.id === id; });
+      if (!log || log.endTime) return;
+      var wasActiveRoad = (activeRoadId === id);
+      log.endTime = Date.now();
+      if (wasActiveRoad) stopRoadTracking();
+      saveLogs();
+      pushLogToCloud(log);
+      recomputeActiveIds();
+      renderLogPanel();
+      renderLogList();
+      showToast('강제 종료했어요.', 1200);
     },
     startRename: function(id){
       renamingId = id;
@@ -1851,6 +1957,7 @@
       var height = unknownEl.checked ? null : (heightEl.value === '' ? null : parseFloat(heightEl.value));
       var note = noteEl.value.trim();
 
+      var savedSpot = null;
       if (pendingLatLng){
         var newSpot = {
           id: 'sp_' + Date.now() + '_' + Math.floor(Math.random()*1000),
@@ -1863,6 +1970,7 @@
           createdAt: Date.now()
         };
         spots.push(newSpot);
+        savedSpot = newSpot;
         closeMapPopup();
       } else if (editingId){
         var spot = spots.find(function(s){ return s.id === editingId; });
@@ -1870,10 +1978,12 @@
           spot.name = name;
           spot.height = height;
           spot.note = note;
+          savedSpot = spot;
         }
         closeMapPopup();
       }
       saveSpots();
+      if (savedSpot) pushSpotToCloud(savedSpot);
       renderAll();
     }
   };
@@ -1951,6 +2061,10 @@
 
     document.getElementById('btnRoad').addEventListener('click', function(){
       if (activeRoadId){ stopLog('road'); return; }
+      if (activeLotId || activeParkingId){
+        showToast('주차장/주차 로깅이 진행 중이라 시작할 수 없어요. "로깅 기록"에서 먼저 종료해주세요.');
+        return;
+      }
       // SSD 번호는 직전 값이 자동으로 채워지고 선택돼 있어서, 안 바뀌었으면 그냥 "시작"만 누르면 됨.
       // 환경(일반도로/고속도로)도 기본값(일반도로)이 이미 선택돼 있어 한 번의 탭으로 시작 가능.
       openStartModal({ title: '일반도로 로깅 시작', showName: false, showEnv: true }, function(res){
@@ -1960,6 +2074,10 @@
     });
     document.getElementById('btnLot').addEventListener('click', function(){
       if (activeLotId){ stopLog('parking_lot'); return; }
+      if (activeRoadId || activeParkingId){
+        showToast('일반도로/주차 로깅이 진행 중이라 시작할 수 없어요. "로깅 기록"에서 먼저 종료해주세요.');
+        return;
+      }
       var lastLotName = '';
       try { lastLotName = localStorage.getItem('lastLotName') || ''; } catch(e){}
       // 마지막으로 쓴 주차장 이름을 기본값으로 채워둠 — 같은 주차장이면 바로 "시작"만 누르면 되고,
@@ -1972,6 +2090,10 @@
     });
     document.getElementById('btnParking').addEventListener('click', function(){
       if (activeParkingId){ stopLog('parking'); return; }
+      if (activeRoadId || activeLotId){
+        showToast('일반도로/주차장 로깅이 진행 중이라 시작할 수 없어요. "로깅 기록"에서 먼저 종료해주세요.');
+        return;
+      }
       // 주차 로깅은 직전 주차장 로깅에서 이름과 SSD 번호를 그대로 물려받아서, 모달 없이 바로 시작됨
       // (같은 주차장 안에서 이어지는 작업이라 SSD를 다시 물어보면 불필요한 조작이 늘어나기 때문).
       var lastLot = logs.filter(function(l){ return l.type === 'parking_lot' && l.endTime; })
