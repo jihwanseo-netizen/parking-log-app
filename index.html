@@ -509,6 +509,20 @@
   }
   .log-item-edit:hover{ color: var(--yellow); }
 
+  .log-date-header{
+    font-size: 12px; font-weight: 800; color: var(--ink-dim);
+    padding: 14px 10px 4px 10px; letter-spacing: 0.02em;
+  }
+  .log-date-header:first-child{ padding-top: 2px; }
+  .log-event-item{
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px 5px 34px;
+    font-size: 12.5px; color: var(--ink-dim);
+  }
+  .log-event-icon{ flex-shrink: 0; }
+  .log-event-label{ flex: 1; }
+  .log-event-time{ font-variant-numeric: tabular-nums; }
+
   .geo-status{
     font-size: 11px; color: var(--ink-dim); margin-top: 8px;
   }
@@ -901,6 +915,7 @@
   var roadPolylines = {};
   var liveMarker = null;
   var lastPathPushAt = 0;
+  var highwaySampleTimestamps = {}; // logId -> 마지막으로 구간명을 확인한 시각(로컬 전용, 클라우드로 동기화 안 됨)
   var followMode = false; // true면 실시간 위치가 갱신될 때마다 지도를 그 위치로 따라감(일반도로 로깅 중에만 동작)
   var showVisited = false; // true일 때만 '갔던 곳'(visited=true) 핀을 지도에 표시. 평소엔 숨겨서 지도가 복잡해지지 않게 함
   var showCandidates = false; // true일 때만 '안 갔던 곳'(candidate=true) 후보 핀을 지도에 표시
@@ -995,12 +1010,16 @@
       : '';
     var lastSSD = '';
     try { lastSSD = localStorage.getItem('lastSSD') || ''; } catch(e){}
+    var lastDriver = '';
+    try { lastDriver = localStorage.getItem('lastDriver') || ''; } catch(e){}
     openModal(
       '<h3>' + config.title + '</h3>' +
       nameField +
       envField +
       '<label class="modal-field-label">SSD 번호</label>' +
       '<input type="text" id="modalSsdInput" value="' + escapeHtml(lastSSD) + '" placeholder="예: SSD-01" />' +
+      '<label class="modal-field-label">운전자</label>' +
+      '<input type="text" id="modalDriverInput" value="' + escapeHtml(lastDriver) + '" placeholder="예: 홍길동" />' +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
         '<button class="btn-primary" onclick="AppMap.confirmModal()">시작</button>' +
@@ -1092,10 +1111,12 @@
       // 이 필드들이 생기기 전에 만들어진 옛날 기록에는 값이 아예 없을 수 있어서, 여기서 채워둠.
       // (특히 클라우드로 올릴 때 Firestore는 undefined 값이 있으면 저장 자체를 거부함)
       if (l.ssd === undefined) l.ssd = '';
+      if (l.driver === undefined) l.driver = '';
       if (l.highway === undefined) l.highway = false;
       if (l.startLat === undefined) l.startLat = null;
       if (l.startLng === undefined) l.startLng = null;
       if (l.address === undefined) l.address = '';
+      if (l.highwayRoadNames === undefined) l.highwayRoadNames = [];
       if (l.endTime === undefined) l.endTime = null;
       if (!l.endTime){
         if (l.type === 'road') activeRoadId = l.id;
@@ -1279,8 +1300,8 @@
   function openTeamCodeModal(){
     openModal(
       '<h3>팀 코드 입력</h3>' +
-      '<p>같이 다니는 폰끼리 같은 코드를 입력하면, 로깅 기록과 장소 체크리스트를 서로 실시간으로 보고 이어받을 수 있어요. 안 써도 이 기기 안에서는 그대로 사용 가능해요.</p>' +
-      '<input type="text" id="teamCodeInput" value="' + escapeHtml(teamCode || '') + '" placeholder="예: RS" />' +
+      '<p>같이 다니는 폰끼리 같은 코드를 입력하면, 로깅 기록과 장소 체크리스트를 서로 실시간으로 보고 이어받을 수 있어요. 안 써도 이 기기 안에서는 그대로 사용 가능해요.<br/>대문자/소문자를 구분해요 — 예를 들어 "RS4"와 "rs4"는 서로 다른 팀으로 취급돼요.</p>' +
+      '<input type="text" id="teamCodeInput" value="' + escapeHtml(teamCode || '') + '" placeholder="예: RS4 또는 rs4" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />' +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" onclick="AppMap.skipTeamCode()">나중에</button>' +
         '<button class="btn-primary" onclick="AppMap.confirmTeamCode()">저장</button>' +
@@ -1466,10 +1487,12 @@
       startTime: Date.now(),
       endTime: null,
       ssd: extra.ssd || '',
+      driver: extra.driver || '',
       highway: !!extra.highway,   // 일반도로 로깅에서만 의미 있음(환경: 일반도로/고속도로)
       startLat: null,
       startLng: null,
       address: '',                // 시작 지점 주소 (역지오코딩으로 나중에 채워짐)
+      highwayRoadNames: [],       // 고속도로 로깅 중 자동으로 인식된 구간명들(중복 없이, 순서대로)
       events: []                  // 일반도로 로깅 중 SPECIAL/아이 버튼 탭 기록 {type, time}
     };
     if (type === 'road') log.path = [];
@@ -1516,6 +1539,39 @@
         }
       })
       .catch(function(){ /* 오프라인 등 — 무시 */ });
+  }
+  // 고속도로 로깅 중 현재 위치를 주기적으로 역지오코딩해서 "OO고속도로" 같은 구간명을 자동으로
+  // 알아내 본다(리포트의 "고속도로" 칸용). Nominatim(OpenStreetMap) 데이터에 도로명이 없거나
+  // 다르게 표기돼 있으면 인식되지 않을 수 있는 최선 노력(best-effort) 기능 — 실패해도 로깅 자체는
+  // 그대로 계속되고, 그 구간의 칸만 비게 된다.
+  var HIGHWAY_SAMPLE_INTERVAL_MS = 45000;
+  function maybeSampleHighwayRoad(log){
+    if (!log || !log.highway) return;
+    var now = Date.now();
+    var last = highwaySampleTimestamps[log.id] || 0;
+    if (now - last < HIGHWAY_SAMPLE_INTERVAL_MS) return;
+    highwaySampleTimestamps[log.id] = now;
+    var p = log.path && log.path.length ? log.path[log.path.length - 1] : null;
+    if (!p) return;
+    var lat = Array.isArray(p) ? p[0] : p.lat;
+    var lng = Array.isArray(p) ? p[1] : p.lng;
+    var url = 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=' + lat + '&lon=' + lng + '&zoom=17&addressdetails=1';
+    fetch(url, { headers: { 'Accept-Language': 'ko' } })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(data){
+        var addr = data && data.address;
+        var roadName = addr ? (addr.road || addr.trunk || addr.motorway || '') : '';
+        if (!roadName) return;
+        if (roadName.indexOf('고속도로') === -1 && roadName.indexOf('고속화도로') === -1) return; // 고속도로 이름으로 보이지 않으면 무시
+        if (!log.highwayRoadNames) log.highwayRoadNames = [];
+        var lastName = log.highwayRoadNames.length ? log.highwayRoadNames[log.highwayRoadNames.length - 1] : null;
+        if (roadName !== lastName){
+          log.highwayRoadNames.push(roadName);
+          saveLogs();
+          pushLogToCloud(log);
+        }
+      })
+      .catch(function(){ /* 실패해도 무시 — 리포트의 구간명 칸만 비게 됨 */ });
   }
   function stopLog(type){
     var id = type === 'road' ? activeRoadId : type === 'parking_lot' ? activeLotId : type === 'parking' ? activeParkingId : activeSceneId;
@@ -1570,7 +1626,8 @@
   function startTrip(opts){
     opts = opts || {};
     if (opts.ssd){ try { localStorage.setItem('lastSSD', opts.ssd); } catch(e){} }
-    var log = startLog('road', '주차 탐색', { ssd: opts.ssd, highway: false });
+    if (opts.driver){ try { localStorage.setItem('lastDriver', opts.driver); } catch(e){} }
+    var log = startLog('road', '주차 탐색', { ssd: opts.ssd, driver: opts.driver, highway: false });
     log.vehicle = opts.vehicle || '';
     log.startKm = opts.startKm || '';
     log.mode = 'drive';
@@ -1674,6 +1731,8 @@
     tripModalVehicle = 'LX2';
     var lastSSD = '';
     try { lastSSD = localStorage.getItem('lastSSD') || ''; } catch(e){}
+    var lastDriver = '';
+    try { lastDriver = localStorage.getItem('lastDriver') || ''; } catch(e){}
     openModal(
       '<h3>주차 탐색 기록 시작</h3>' +
       '<label class="modal-field-label">출발 키로수 (선택)</label>' +
@@ -1685,6 +1744,8 @@
       '</div>' +
       '<label class="modal-field-label">SSD 번호 (선택)</label>' +
       '<input type="text" id="modalSsdInput" value="' + escapeHtml(lastSSD) + '" placeholder="예: SSD-01" />' +
+      '<label class="modal-field-label">운전자 (선택)</label>' +
+      '<input type="text" id="modalDriverInput" value="' + escapeHtml(lastDriver) + '" placeholder="예: 홍길동" />' +
       '<label class="modal-field-label">첫 목적지 (선택)</label>' +
       '<input type="text" id="modalFirstDest" placeholder="예: 강남파이낸스센터" />' +
       '<div class="popup-actions">' +
@@ -1789,6 +1850,7 @@
       var latlng = [pos.coords.latitude, pos.coords.longitude, Date.now()];
       log.path.push(latlng);
       renderRoadPath(log.id, log.path);
+      maybeSampleHighwayRoad(log);
       var kakaoLatLng = toKakaoLatLng(latlng);
       if (!liveMarker){
         liveMarker = new kakao.maps.CustomOverlay({
@@ -1837,6 +1899,7 @@
       var latlng = [pos.coords.latitude, pos.coords.longitude, Date.now()];
       log.path.push(latlng);
       renderRoadPath(log.id, log.path);
+      maybeSampleHighwayRoad(log);
       if (liveMarker){
         var kakaoLatLng = toKakaoLatLng(latlng);
         liveMarker.setPosition(kakaoLatLng);
@@ -2040,7 +2103,7 @@
     if (/[",\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
     return s;
   }
-  var REPORT_HEADER = ['시나리오','취득일','SSD','위치','주소','환경','취득 시작시간','취득 종료시간','취득 시간','목표 대상','비고','SPECIAL','아이'];
+  var REPORT_HEADER = ['시나리오','취득일','SSD','위치','고속도로','환경','취득 시작시간','취득 종료시간','취득 시간','목표 대상','비고','SPECIAL','아이','운전자'];
   function buildReportRows(dayLogs){
     var rows = dayLogs.map(function(l){
       var isRoad = l.type === 'road';
@@ -2048,21 +2111,27 @@
       var events = l.events || [];
       var specialCount = events.filter(function(e){ return e.type === 'special'; }).length;
       var childCount = events.filter(function(e){ return e.type === 'child'; }).length;
-      var addressOrCoord = l.address || ((l.startLat != null) ? (l.startLat.toFixed(6) + ',' + l.startLng.toFixed(6)) : '');
+      // 위치: 주행(road) 로깅은 별도로 위치를 입력받지 않으므로 비워둠. 주차장/주차 로깅은 입력한 이름 그대로.
+      var location = isRoad ? '' : (l.label || '');
+      // 고속도로 구간명: 고속도로 로깅 중 GPS 위치를 바탕으로 자동 인식된 구간명들("OO고속도로 → OO고속도로").
+      // 역지오코딩 결과에 따라 비어 있을 수 있다(최선 노력 기능).
+      var highwayNames = (isRoad && l.highway && l.highwayRoadNames && l.highwayRoadNames.length)
+        ? l.highwayRoadNames.join(' → ') : '';
       return [
         LOG_SCENARIO[l.type] || '',
         formatYYYYMMDD(l.startTime),
         l.ssd || '',
-        l.label || '',
-        addressOrCoord,
+        location,
+        highwayNames,
         env,
         formatHM(l.startTime),
         l.endTime ? formatHM(l.endTime) : '',
         l.endTime ? formatDurationHM(l.endTime - l.startTime) : '',
         LOG_TARGET[l.type] || '',
         isRoad ? '' : (LOG_REMARK[l.type] || ''),
-        String(specialCount),
-        String(childCount)
+        specialCount > 0 ? 'o' : 'x',
+        childCount > 0 ? 'o' : 'x',
+        l.driver || ''
       ];
     });
     return [REPORT_HEADER].concat(rows);
@@ -2105,6 +2174,79 @@
 
   var renamingId = null;
   var showAllLogs = false; // 기본은 최근 10시간 기록만; 눌러서 지난 기록도 볼 수 있음
+  // SPECIAL/아이 탭 이벤트를 지난기록 타임라인에 개별 줄로 보여줄 때 쓰는 라벨/아이콘
+  var EVENT_META = {
+    special: { icon: '⚠', label: '특수차량' },
+    child:   { icon: '🧒', label: '어린이' }
+  };
+  var WEEKDAY_KO = ['일', '월', '화', '수', '목', '금', '토'];
+  // 날짜 구분 헤더용 — "2026.09.10 (목)"
+  function formatDateHeader(ms){
+    var d = new Date(ms);
+    return d.getFullYear() + '.' + pad(d.getMonth()+1) + '.' + pad(d.getDate()) + ' (' + WEEKDAY_KO[d.getDay()] + ')';
+  }
+  // 로컬 날짜 기준으로 그룹을 나누기 위한 키 (자정 넘어가는 로깅은 시작한 날짜에 귀속)
+  function dateKeyOf(ms){
+    var d = new Date(ms);
+    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate());
+  }
+  // 날짜 헤더가 이미 붙어있으므로 각 줄에는 시:분:초까지만 (정확한 시간 요구사항은 초 단위로 충족)
+  function formatTimeHMS(ms){
+    var d = new Date(ms);
+    return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  function renderLogRow(l){
+    var meta = LOG_META[l.type];
+    var live = !l.endTime;
+    var endText = live ? '진행 중' : formatTimeHMS(l.endTime);
+    var durMs = (live ? Date.now() : l.endTime) - l.startTime;
+    var editing = renamingId === l.id;
+    var nameHtml = editing
+      ? '<input class="log-item-name-input" id="renameInput" value="' + escapeHtml(l.label) + '" />'
+      : '<span class="log-item-name">' + escapeHtml(l.label) + '</span>';
+    var timesHtml = editing
+      ? (
+          '<div class="log-item-time-edit-row">' +
+            '<label>시작</label>' +
+            '<input type="datetime-local" step="1" class="log-item-time-input" id="renameStartInput" value="' + toLocalInputValue(l.startTime) + '" />' +
+          '</div>' +
+          (live ? '' :
+          '<div class="log-item-time-edit-row">' +
+            '<label>종료</label>' +
+            '<input type="datetime-local" step="1" class="log-item-time-input" id="renameEndInput" value="' + toLocalInputValue(l.endTime) + '" />' +
+          '</div>')
+        )
+      : (
+          '<div class="log-item-times">' + formatTimeHMS(l.startTime) + ' → ' + endText + '</div>'
+        );
+    return '<div class="log-item">' +
+      '<span class="log-type-dot" style="background:' + meta.color + '"></span>' +
+      '<div class="log-item-body">' +
+        '<div class="log-item-top">' +
+          nameHtml +
+          '<span class="log-item-type-tag">' + meta.label + '</span>' +
+          (live ? '<span class="log-item-live">LIVE</span>' : '') +
+        '</div>' +
+        timesHtml +
+        '<div class="log-item-dur">소요 시간 ' + formatDuration(durMs) + '</div>' +
+      '</div>' +
+      (renamingId === l.id
+        ? '<button class="log-item-edit" onclick="AppMap.confirmRename(\'' + l.id + '\')">✓</button>'
+        : '<button class="log-item-edit" onclick="AppMap.startRename(\'' + l.id + '\')">✎</button>') +
+      (live
+        ? '<button class="item-force-stop" onclick="AppMap.forceStopLog(\'' + l.id + '\')" title="다른 기기에서 끝내지 않고 남은 로깅을 지금 이 시각으로 강제 종료">강제종료</button>'
+        : '<button class="item-del" onclick="AppMap.deleteLog(\'' + l.id + '\')">&times;</button>') +
+    '</div>';
+  }
+  // SPECIAL/아이 탭 한 번을 로깅 목록에 단독 줄로 표시 (예: "⚠ 특수차량  14:32:07")
+  function renderEventRow(e){
+    var meta = EVENT_META[e.type] || { icon: '•', label: e.type };
+    return '<div class="log-event-item">' +
+      '<span class="log-event-icon">' + meta.icon + '</span>' +
+      '<span class="log-event-label">' + escapeHtml(meta.label) + '</span>' +
+      '<span class="log-event-time">' + formatTimeHMS(e.time) + '</span>' +
+    '</div>';
+  }
   function renderLogList(){
     var list = document.getElementById('list');
     var now = Date.now();
@@ -2125,50 +2267,31 @@
         '</div>';
       return;
     }
-    list.innerHTML = toggleHtml + sorted.map(function(l){
-      var meta = LOG_META[l.type];
-      var live = !l.endTime;
-      var endText = live ? '진행 중' : formatDateTime(l.endTime);
-      var durMs = (live ? Date.now() : l.endTime) - l.startTime;
-      var editing = renamingId === l.id;
-      var nameHtml = editing
-        ? '<input class="log-item-name-input" id="renameInput" value="' + escapeHtml(l.label) + '" />'
-        : '<span class="log-item-name">' + escapeHtml(l.label) + '</span>';
-      var timesHtml = editing
-        ? (
-            '<div class="log-item-time-edit-row">' +
-              '<label>시작</label>' +
-              '<input type="datetime-local" step="1" class="log-item-time-input" id="renameStartInput" value="' + toLocalInputValue(l.startTime) + '" />' +
-            '</div>' +
-            (live ? '' :
-            '<div class="log-item-time-edit-row">' +
-              '<label>종료</label>' +
-              '<input type="datetime-local" step="1" class="log-item-time-input" id="renameEndInput" value="' + toLocalInputValue(l.endTime) + '" />' +
-            '</div>')
-          )
-        : (
-            '<div class="log-item-times">시작 ' + formatDateTime(l.startTime) + '</div>' +
-            '<div class="log-item-times">종료 ' + endText + '</div>'
-          );
-      return '<div class="log-item">' +
-        '<span class="log-type-dot" style="background:' + meta.color + '"></span>' +
-        '<div class="log-item-body">' +
-          '<div class="log-item-top">' +
-            nameHtml +
-            '<span class="log-item-type-tag">' + meta.label + '</span>' +
-            (live ? '<span class="log-item-live">LIVE</span>' : '') +
-          '</div>' +
-          timesHtml +
-          '<div class="log-item-dur">소요 시간 ' + formatDuration(durMs) + '</div>' +
-        '</div>' +
-        (renamingId === l.id
-          ? '<button class="log-item-edit" onclick="AppMap.confirmRename(\'' + l.id + '\')">✓</button>'
-          : '<button class="log-item-edit" onclick="AppMap.startRename(\'' + l.id + '\')">✎</button>') +
-        (live
-          ? '<button class="item-force-stop" onclick="AppMap.forceStopLog(\'' + l.id + '\')" title="다른 기기에서 끝내지 않고 남은 로깅을 지금 이 시각으로 강제 종료">강제종료</button>'
-          : '<button class="item-del" onclick="AppMap.deleteLog(\'' + l.id + '\')">&times;</button>') +
-      '</div>';
+
+    // 날짜별로 묶어서 보여주고, 같은 날짜 안에서는 로깅 기록과 SPECIAL/아이 탭 이벤트를
+    // 실제 발생 시각 순서 그대로 섞어서 하나의 타임라인으로 보여준다.
+    var groups = [];
+    var groupByKey = {};
+    sorted.forEach(function(l){
+      var key = dateKeyOf(l.startTime);
+      var g = groupByKey[key];
+      if (!g){ g = { dateMs: l.startTime, items: [] }; groupByKey[key] = g; groups.push(g); }
+      g.items.push({ kind: 'log', time: l.startTime, log: l });
+      (l.events || []).forEach(function(e){
+        g.items.push({ kind: 'event', time: e.time, event: e });
+      });
+    });
+    groups.forEach(function(g){
+      g.items.sort(function(a, b){ return b.time - a.time; });
+    });
+
+    list.innerHTML = toggleHtml + groups.map(function(g){
+      var rowsHtml = g.items.map(function(it){
+        return it.kind === 'event' ? renderEventRow(it.event) : renderLogRow(it.log);
+      }).join('');
+      return '<div class="log-date-header">' + formatDateHeader(g.dateMs) + '</div>' + rowsHtml;
     }).join('');
+
     if (renamingId){
       var input = document.getElementById('renameInput');
       var editInputs = [input, document.getElementById('renameStartInput'), document.getElementById('renameEndInput')];
@@ -2330,9 +2453,11 @@
     confirmModal: function(){
       var nameEl = document.getElementById('modalInput');
       var ssdEl = document.getElementById('modalSsdInput');
+      var driverEl = document.getElementById('modalDriverInput');
       var result = {
         name: nameEl ? nameEl.value.trim() : '',
         ssd: ssdEl ? ssdEl.value.trim() : '',
+        driver: driverEl ? driverEl.value.trim() : '',
         highway: modalEnvChoice === 'highway'
       };
       var cb = modalOnSave;
@@ -2365,11 +2490,13 @@
     confirmTripStart: function(){
       var kmEl = document.getElementById('modalStartKm');
       var ssdEl = document.getElementById('modalSsdInput');
+      var driverEl = document.getElementById('modalDriverInput');
       var destEl = document.getElementById('modalFirstDest');
       var opts = {
         startKm: kmEl ? kmEl.value.trim() : '',
         vehicle: tripModalVehicle,
         ssd: ssdEl ? ssdEl.value.trim() : '',
+        driver: driverEl ? driverEl.value.trim() : '',
         firstDestination: destEl ? destEl.value.trim() : ''
       };
       closeModal();
@@ -2530,7 +2657,8 @@
       // 환경(일반도로/고속도로)도 기본값(일반도로)이 이미 선택돼 있어 한 번의 탭으로 시작 가능.
       openStartModal({ title: '일반도로 로깅 시작', showName: false, showEnv: true }, function(res){
         if (res.ssd){ try { localStorage.setItem('lastSSD', res.ssd); } catch(e){} }
-        startLog('road', null, { ssd: res.ssd, highway: res.highway });
+        if (res.driver){ try { localStorage.setItem('lastDriver', res.driver); } catch(e){} }
+        startLog('road', null, { ssd: res.ssd, driver: res.driver, highway: res.highway });
       });
     });
     document.getElementById('btnLot').addEventListener('click', function(){
@@ -2546,7 +2674,8 @@
       openStartModal({ title: '주차장 로깅 시작', showName: true, nameDefault: lastLotName, showEnv: false }, function(res){
         if (res.name){ try { localStorage.setItem('lastLotName', res.name); } catch(e){} }
         if (res.ssd){ try { localStorage.setItem('lastSSD', res.ssd); } catch(e){} }
-        startLog('parking_lot', res.name, { ssd: res.ssd });
+        if (res.driver){ try { localStorage.setItem('lastDriver', res.driver); } catch(e){} }
+        startLog('parking_lot', res.name, { ssd: res.ssd, driver: res.driver });
       });
     });
     document.getElementById('btnParking').addEventListener('click', function(){
@@ -2561,7 +2690,8 @@
         .sort(function(a,b){ return b.endTime - a.endTime; })[0];
       var inherited = lastLot ? (lastLot.label + ' - 주차') : undefined;
       var inheritedSsd = lastLot ? lastLot.ssd : undefined;
-      startLog('parking', inherited, { ssd: inheritedSsd });
+      var inheritedDriver = lastLot ? lastLot.driver : undefined;
+      startLog('parking', inherited, { ssd: inheritedSsd, driver: inheritedDriver });
     });
     document.getElementById('btnSpecial').addEventListener('click', function(){
       AppMap.tapEvent('special');
