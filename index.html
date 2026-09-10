@@ -345,6 +345,71 @@
   .event-btn.child{ background: #2F6FED; border-color: #2F6FED; color: #fff; }
   .event-btn:active{ opacity: 0.8; }
 
+  /* ---------- 주차 탐색 트립 ---------- */
+  .trip-start-btn{
+    width: 100%;
+    background: var(--blue);
+    border: none;
+    color: #fff;
+    padding: 11px 8px;
+    border-radius: 8px;
+    font-weight: 800;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    margin-bottom: 8px;
+  }
+  .trip-start-btn:active{ opacity: 0.85; }
+  .trip-start-btn.blocked{ opacity: 0.3; cursor: not-allowed; }
+  .trip-panel{ margin-bottom: 8px; }
+  .trip-leg-card{
+    background: var(--asphalt-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  .trip-leg-dest{ font-size: 14px; font-weight: 800; color: var(--ink); }
+  .trip-leg-timer{ font-size: 22px; font-weight: 800; color: var(--yellow); font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .trip-mode-row{ display: flex; gap: 8px; margin-top: 10px; }
+  .trip-mode-btn{
+    flex: 1;
+    background: var(--asphalt);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    padding: 9px 8px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 12.5px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .trip-mode-btn.active{ background: var(--orange); border-color: var(--orange); color: #fff; }
+  .trip-tag-grid{
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .trip-tag-btn{
+    background: var(--asphalt);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    padding: 8px 6px;
+    border-radius: 7px;
+    font-weight: 600;
+    font-size: 11.5px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .trip-tag-btn:active{ background: var(--yellow); color: #1A1C1F; border-color: var(--yellow); }
+  #tripMemo{
+    width: 100%; padding: 7px 9px; background: var(--asphalt);
+    border: 1px solid var(--line); border-radius: 7px; color: var(--ink); font-size: 13px; outline: none;
+    font-family: inherit; resize: none; height: 46px; margin-top: 4px;
+  }
+  .trip-exit-row{ display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+  .trip-exit-row button{ padding: 10px 0; border-radius: 7px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit; }
+
   /* 하루 로깅 종료 & 리포트 버튼 — 시작/종료 버튼들과 헷갈리지 않도록 별도 스타일 */
   .day-end-row{ margin-top: 10px; }
   .day-end-btn{
@@ -699,7 +764,8 @@
         <span id="logStatusText">로깅 대기 중</span>
         <span class="log-timer" id="logTimer" style="margin-left:auto; display:none;"></span>
       </div>
-      <div class="log-btn-row">
+      <button class="trip-start-btn" id="btnTripStart" type="button">🚗 주차 탐색 기록 시작</button>
+      <div class="log-btn-row" id="mainLogBtnRow">
         <button class="log-btn" id="btnRoad">일반도로 로깅 시작</button>
         <button class="log-btn" id="btnLot">주차장 로깅 시작</button>
         <button class="log-btn" id="btnParking">주차 로깅 시작</button>
@@ -707,6 +773,28 @@
       <div class="log-btn-row event-btn-row" id="eventBtnRow" style="display:none;">
         <button class="log-btn event-btn special" id="btnSpecial">⚠ SPECIAL</button>
         <button class="log-btn event-btn child" id="btnChild">🧒 아이</button>
+      </div>
+      <div id="tripPanel" class="trip-panel" style="display:none;">
+        <div class="trip-leg-card">
+          <div class="trip-leg-dest" id="tripLegDest">목적지 미입력</div>
+          <div class="trip-leg-timer" id="tripLegTimer">00:00</div>
+          <div class="trip-mode-row">
+            <button type="button" class="trip-mode-btn" id="btnTripRest">☕ 휴식 시작</button>
+            <button type="button" class="trip-mode-btn" id="btnTripDrive">🚗 주행 기록 시작</button>
+          </div>
+          <div class="trip-tag-grid" id="tripTagGrid"></div>
+          <label class="modal-field-label">메모</label>
+          <textarea id="tripMemo" placeholder="특이사항을 적어주세요 (선택)"></textarea>
+          <label class="popup-checkline">
+            <input type="checkbox" id="tripNoSpot" />
+            <span>자리가 없어 주차하지 못함</span>
+          </label>
+          <div class="trip-exit-row">
+            <button type="button" class="btn-primary" id="btnTripArrived">주차장 도착</button>
+            <button type="button" class="btn-secondary" id="btnTripPass">경유 (주차 안 함 · 다음 목적지로)</button>
+            <button type="button" class="btn-danger" id="btnTripReturn">회사 복귀 (알체라)</button>
+          </div>
+        </div>
       </div>
       <div class="geo-status" id="geoStatus" style="display:none;"></div>
       <div class="day-end-row">
@@ -736,6 +824,7 @@
     <div id="map"></div>
     <div id="mapFabs">
       <button id="btnVisited" class="map-fab" type="button" onclick="AppMap.toggleVisitedPins()" title="갔던 곳 보기">📍</button>
+      <button id="btnCandidates" class="map-fab" type="button" onclick="AppMap.toggleCandidatePins()" title="안 갔던 곳 보기">🧭</button>
       <button id="btnFollow" class="map-fab" type="button" onclick="AppMap.toggleFollow()" title="현위치 따라가기">🎯</button>
       <button id="btnRefresh" class="map-fab" type="button" onclick="AppMap.refreshApp()" title="새로고침">↻</button>
     </div>
@@ -814,6 +903,26 @@
   var lastPathPushAt = 0;
   var followMode = false; // true면 실시간 위치가 갱신될 때마다 지도를 그 위치로 따라감(일반도로 로깅 중에만 동작)
   var showVisited = false; // true일 때만 '갔던 곳'(visited=true) 핀을 지도에 표시. 평소엔 숨겨서 지도가 복잡해지지 않게 함
+  var showCandidates = false; // true일 때만 '안 갔던 곳'(candidate=true) 후보 핀을 지도에 표시
+
+  // ---- 주차 탐색 트립(출발 → 이동/휴식 → 목적지 도착·경유·복귀) ----
+  // 트립은 새로운 병렬 로깅 종류가 아니라, 기존 '일반도로' 로깅(log.type==='road')을 그대로 감싸서
+  // 시작한다 — 즉 활성 로깅 하나(activeRoadId)에 legs 배열이 들어있으면 그게 트립이다.
+  var TRIP_TAGS = [
+    { key: 'special',      label: '⚠ 특수차량' },
+    { key: 'child',        label: '🧒 어린이' },
+    { key: 'pm',           label: '🛴 PM' },
+    { key: 'illegal_park', label: '🚫 불법주정차' },
+    { key: 'construction', label: '🚧 공사중' },
+    { key: 'narrow_alley', label: '🛣 좁은 골목' },
+    { key: 'steep_slope',  label: '⛰ 급경사' },
+    { key: 'signal_wait',  label: '🚦 신호대기' },
+    { key: 'pedestrian',   label: '🚶 보행자 많음' },
+    { key: 'etc',          label: '❓ 기타' }
+  ];
+  var tripModalVehicle = 'LX2'; // 트립 시작 모달에서 고른 차종 (LX2/GN7) — 임시 선택값
+  var tripPanelLegId = null;    // 트립 패널의 메모/체크박스를 leg가 바뀔 때만 다시 채우기 위한 추적용
+  var wakeLock = null;          // Wake Lock — 화면이 꺼지지 않게 해서 트립 중 위치 추적이 끊기는 걸 최소화
 
   var LOG_META = {
     road:          { label: '일반도로', color: '#2F6FED' },
@@ -1283,6 +1392,7 @@
     markersById = {};
     spots.forEach(function(spot){
       if (spot.visited && !showVisited) return; // 갔던 곳은 버튼을 켰을 때만 표시
+      if (spot.candidate && !showCandidates) return; // 안 갔던 곳(후보)도 버튼을 켰을 때만 표시
       var overlay = new kakao.maps.CustomOverlay({
         position: new kakao.maps.LatLng(spot.lat, spot.lng),
         content: makePinHtml(spot),
@@ -1374,6 +1484,7 @@
     renderLogList();
     captureStartLocation(log);
     if (type === 'road') focusOnLog(log.id, true);
+    return log; // 트립 시작(startTrip)에서 방금 만든 log에 vehicle/legs 등을 추가로 채우기 위해 필요
   }
 
   // 로깅 시작 지점의 GPS를 한 번만 찍어서, 리포트에 넣을 "주소"로 역지오코딩한다.
@@ -1411,7 +1522,7 @@
     if (!id) return;
     var log = logs.find(function(l){ return l.id === id; });
     if (log) log.endTime = Date.now();
-    if (type === 'road'){ activeRoadId = null; stopRoadTracking(); }
+    if (type === 'road'){ activeRoadId = null; stopRoadTracking(); releaseWakeLock(); }
     if (type === 'parking'){ activeParkingId = null; }
     if (type === 'parking_lot'){
       activeLotId = null;
@@ -1430,6 +1541,168 @@
     pushLogToCloud(log);
     renderLogPanel();
     renderLogList();
+  }
+
+  /* ---------- 주차 탐색 트립 ---------- */
+  // 트립은 activeRoadId가 가리키는 '일반도로' 로깅(log)에 legs 배열을 붙여서 표현한다.
+  // 그래서 GPS 추적 시작/종료(startRoadTracking/stopRoadTracking), 경로 그리기, 4분 리스타트
+  // 타이머 제외 등 기존 일반도로 로깅의 동작을 트립도 그대로 물려받는다.
+  function activeTripLog(){
+    if (!activeRoadId) return null;
+    var log = logs.find(function(l){ return l.id === activeRoadId; });
+    return (log && log.legs && log.legs.length) ? log : null;
+  }
+  function currentLeg(log){
+    return (log && log.legs && log.legs.length) ? log.legs[log.legs.length - 1] : null;
+  }
+  function newLeg(destination){
+    return {
+      id: 'leg_' + Date.now() + '_' + Math.floor(Math.random()*1000),
+      destination: destination || '',
+      startTime: Date.now(),
+      endTime: null,
+      events: [],
+      memo: '',
+      noSpot: false,   // "자리가 없어 주차하지 못함"
+      outcome: null    // 'arrived' | 'passed' | 'returned'
+    };
+  }
+  function startTrip(opts){
+    opts = opts || {};
+    if (opts.ssd){ try { localStorage.setItem('lastSSD', opts.ssd); } catch(e){} }
+    var log = startLog('road', '주차 탐색', { ssd: opts.ssd, highway: false });
+    log.vehicle = opts.vehicle || '';
+    log.startKm = opts.startKm || '';
+    log.mode = 'drive';
+    log.legs = [ newLeg(opts.firstDestination || '') ];
+    tripPanelLegId = null;
+    saveLogs();
+    pushLogToCloud(log);
+    requestWakeLock();
+    renderLogPanel();
+  }
+  // 휴식(rest)/주행(drive) 모드 전환 — activeRoadId는 그대로 두고 GPS watch만 껐다 켠다.
+  // 다시 켤 때 신호 간격이 20초(ROAD_GAP_MS)를 넘으면 buildPathSegments가 알아서 경로를 끊어 그려준다.
+  function setTripMode(mode){
+    var log = activeTripLog();
+    if (!log || log.mode === mode) return;
+    log.mode = mode;
+    if (mode === 'rest') stopRoadTracking(); else startRoadTracking();
+    saveLogs();
+    pushLogToCloud(log);
+    renderLogPanel();
+  }
+  // 주차장 도착 / 경유: 현재 leg를 종료하고 다음 목적지를 물어본 뒤 새 leg를 이어붙인다(트립은 계속 진행).
+  function promptNextLegAndAdvance(outcome){
+    openModal(
+      '<h3>' + (outcome === 'arrived' ? '주차장 도착' : '경유 · 다음 목적지') + '</h3>' +
+      '<label class="modal-field-label">다음 목적지 (선택)</label>' +
+      '<input type="text" id="modalDestInput" placeholder="예: 강남파이낸스센터" />' +
+      '<div class="popup-actions">' +
+        '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
+        '<button class="btn-primary" onclick="AppMap.confirmTripLeg(\'' + outcome + '\')">확인</button>' +
+      '</div>'
+    );
+    setTimeout(function(){ var el = document.getElementById('modalDestInput'); if (el) el.focus(); }, 30);
+  }
+  // 회사 복귀: 트립(=이 일반도로 로깅) 전체를 종료. 다음 목적지를 물어볼 필요가 없어 바로 처리.
+  function endTripReturned(){
+    var log = activeTripLog();
+    if (!log) return;
+    var leg = currentLeg(log);
+    if (leg){ leg.endTime = Date.now(); leg.outcome = 'returned'; }
+    tripPanelLegId = null;
+    stopLog('road'); // activeRoadId 해제 + GPS 추적 종료 + Wake Lock 해제까지 한 번에 처리됨
+    showToast('트립을 종료했어요. 수고하셨습니다!', 1800);
+  }
+  function advanceTripLeg(outcome, nextDestination){
+    var log = activeTripLog();
+    if (!log) return;
+    var leg = currentLeg(log);
+    if (leg){ leg.endTime = Date.now(); leg.outcome = outcome; }
+    log.legs.push(newLeg(nextDestination || ''));
+    tripPanelLegId = null;
+    saveLogs();
+    pushLogToCloud(log);
+    renderLogPanel();
+    showToast(outcome === 'arrived' ? '주차장 도착을 기록했어요.' : '경유로 기록하고 다음 목적지로 이동해요.', 1500);
+  }
+  function renderTripPanel(log){
+    var leg = currentLeg(log);
+    if (!leg) return;
+    var destEl = document.getElementById('tripLegDest');
+    if (destEl) destEl.textContent = leg.destination ? ('목적지: ' + leg.destination) : '목적지 미입력';
+    var restBtn = document.getElementById('btnTripRest');
+    var driveBtn = document.getElementById('btnTripDrive');
+    if (restBtn) restBtn.classList.toggle('active', log.mode === 'rest');
+    if (driveBtn) driveBtn.classList.toggle('active', log.mode !== 'rest');
+    // leg가 바뀐 시점에만 메모/체크박스를 다시 채운다 — 매초 렌더링될 때마다 덮어쓰면
+    // 사용자가 타이핑/체크하는 도중 값이 계속 되돌아가 버리는 문제가 생기기 때문.
+    if (leg.id !== tripPanelLegId){
+      tripPanelLegId = leg.id;
+      var memoEl = document.getElementById('tripMemo');
+      if (memoEl) memoEl.value = leg.memo || '';
+      var noSpotEl = document.getElementById('tripNoSpot');
+      if (noSpotEl) noSpotEl.checked = !!leg.noSpot;
+    }
+    updateTripLegTimer(log);
+  }
+  function updateTripLegTimer(log){
+    var leg = currentLeg(log);
+    var timerEl = document.getElementById('tripLegTimer');
+    if (!leg || !timerEl) return;
+    timerEl.textContent = formatDuration(Date.now() - leg.startTime);
+  }
+  // Wake Lock: 화면이 꺼지지 않게만 해줌 — 폰을 잠그거나 다른 앱으로 전환하면 iOS/안드로이드 모두
+  // 이 웹앱의 백그라운드 실행 자체를 막기 때문에, "화면을 켜둔 채로 운행"하는 경우에만 유효하다.
+  function requestWakeLock(){
+    if (!('wakeLock' in navigator)) return;
+    navigator.wakeLock.request('screen').then(function(lock){
+      wakeLock = lock;
+      lock.addEventListener('release', function(){ wakeLock = null; });
+    }).catch(function(){ /* 권한 거부/미지원 — 조용히 무시, GPS 추적 자체는 계속 시도됨 */ });
+  }
+  function releaseWakeLock(){
+    if (wakeLock){ wakeLock.release().catch(function(){}); wakeLock = null; }
+  }
+  // 브라우저가 자동으로 Wake Lock을 풀어버리는 경우(화면을 껐다 켰을 때 등)를 대비해,
+  // 트립이 진행 중일 때 화면이 다시 보이면 다시 요청한다.
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'visible' && activeTripLog()) requestWakeLock();
+  });
+  function openTripStartModal(){
+    tripModalVehicle = 'LX2';
+    var lastSSD = '';
+    try { lastSSD = localStorage.getItem('lastSSD') || ''; } catch(e){}
+    openModal(
+      '<h3>주차 탐색 기록 시작</h3>' +
+      '<label class="modal-field-label">출발 키로수 (선택)</label>' +
+      '<input type="number" id="modalStartKm" placeholder="예: 12345" />' +
+      '<label class="modal-field-label">차종</label>' +
+      '<div class="env-toggle" id="tripVehicleToggle">' +
+        '<button type="button" class="env-toggle-btn active" data-vehicle="LX2">LX2</button>' +
+        '<button type="button" class="env-toggle-btn" data-vehicle="GN7">GN7</button>' +
+      '</div>' +
+      '<label class="modal-field-label">SSD 번호 (선택)</label>' +
+      '<input type="text" id="modalSsdInput" value="' + escapeHtml(lastSSD) + '" placeholder="예: SSD-01" />' +
+      '<label class="modal-field-label">첫 목적지 (선택)</label>' +
+      '<input type="text" id="modalFirstDest" placeholder="예: 강남파이낸스센터" />' +
+      '<div class="popup-actions">' +
+        '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
+        '<button class="btn-primary" onclick="AppMap.confirmTripStart()">출발 (기록 시작)</button>' +
+      '</div>'
+    );
+    var row = document.getElementById('tripVehicleToggle');
+    if (row){
+      Array.prototype.forEach.call(row.querySelectorAll('.env-toggle-btn'), function(btn){
+        btn.addEventListener('click', function(){
+          Array.prototype.forEach.call(row.querySelectorAll('.env-toggle-btn'), function(b){ b.classList.remove('active'); });
+          btn.classList.add('active');
+          tripModalVehicle = btn.getAttribute('data-vehicle');
+        });
+      });
+    }
+    setTimeout(function(){ var el = document.getElementById('modalStartKm'); if (el) el.focus(); }, 30);
   }
 
   /* ---------- Geolocation path tracking ---------- */
@@ -1590,7 +1863,12 @@
     var btnRoad = document.getElementById('btnRoad');
     var btnLot = document.getElementById('btnLot');
     var btnParking = document.getElementById('btnParking');
+    var btnTripStart = document.getElementById('btnTripStart');
+    var mainLogBtnRow = document.getElementById('mainLogBtnRow');
+    var tripPanel = document.getElementById('tripPanel');
+    var eventBtnRow = document.getElementById('eventBtnRow');
 
+    var trip = activeTripLog();
     var anyActive = activeRoadId || activeLotId || activeParkingId;
 
     // 일반도로 로깅이 꺼지면 따라갈 실시간 위치도 없어지므로 따라가기도 같이 꺼준다.
@@ -1601,28 +1879,44 @@
       btnFollow.classList.toggle('disabled', !activeRoadId);
     }
 
-    // 다른 종류가 진행 중이면 이 버튼은 눌러도 시작이 안 되는 상태.
-    // 예전엔 이걸 그냥 HTML disabled로 막아서 눌러도 "아무 반응 없음"으로 보였는데(혼란의 원인),
-    // 지금은 disabled를 안 걸고 클릭 핸들러 쪽에서 이유를 토스트로 알려준다 — 시각적으로만 흐리게.
+    if (trip){
+      // 트립 진행 중에는 기존 일반도로/주차장/주차 시작 버튼과 SPECIAL/아이 버튼을 숨기고
+      // 트립 전용 패널(목적지/타이머/휴식·주행/특이사항 태그/메모/종료 액션)만 보여준다.
+      if (mainLogBtnRow) mainLogBtnRow.style.display = 'none';
+      if (eventBtnRow) eventBtnRow.style.display = 'none';
+      if (btnTripStart) btnTripStart.style.display = 'none';
+      if (tripPanel) tripPanel.style.display = 'block';
+      renderTripPanel(trip);
+    } else {
+      if (tripPanel) tripPanel.style.display = 'none';
+      if (btnTripStart){
+        btnTripStart.style.display = '';
+        btnTripStart.classList.toggle('blocked', !!anyActive);
+      }
+      if (mainLogBtnRow) mainLogBtnRow.style.display = '';
 
-    // road button
-    var roadBlocked = !!(activeLotId || activeParkingId);
-    btnRoad.textContent = activeRoadId ? '일반도로 로깅 종료' : '일반도로 로깅 시작';
-    btnRoad.className = 'log-btn' + (activeRoadId ? ' on-road' : '') + (roadBlocked ? ' blocked' : '');
+      // 다른 종류가 진행 중이면 이 버튼은 눌러도 시작이 안 되는 상태.
+      // 예전엔 이걸 그냥 HTML disabled로 막아서 눌러도 "아무 반응 없음"으로 보였는데(혼란의 원인),
+      // 지금은 disabled를 안 걸고 클릭 핸들러 쪽에서 이유를 토스트로 알려준다 — 시각적으로만 흐리게.
 
-    // lot button
-    var lotBlocked = !!(activeRoadId || activeParkingId);
-    btnLot.textContent = activeLotId ? '주차장 로깅 종료' : '주차장 로깅 시작';
-    btnLot.className = 'log-btn' + (activeLotId ? ' on-lot' : '') + (lotBlocked ? ' blocked' : '');
+      // road button
+      var roadBlocked = !!(activeLotId || activeParkingId);
+      btnRoad.textContent = activeRoadId ? '일반도로 로깅 종료' : '일반도로 로깅 시작';
+      btnRoad.className = 'log-btn' + (activeRoadId ? ' on-road' : '') + (roadBlocked ? ' blocked' : '');
 
-    // parking button (available right after a 주차장 로깅 session, or any time nothing else is active)
-    var parkingBlocked = !!(activeRoadId || activeLotId);
-    btnParking.textContent = activeParkingId ? '주차 로깅 종료' : '주차 로깅 시작';
-    btnParking.className = 'log-btn' + (activeParkingId ? ' on-parking' : '') + (parkingBlocked ? ' blocked' : '');
+      // lot button
+      var lotBlocked = !!(activeRoadId || activeParkingId);
+      btnLot.textContent = activeLotId ? '주차장 로깅 종료' : '주차장 로깅 시작';
+      btnLot.className = 'log-btn' + (activeLotId ? ' on-lot' : '') + (lotBlocked ? ' blocked' : '');
 
-    // SPECIAL/아이 버튼은 어떤 로깅이든(일반도로/주차장/주차) 진행 중이면 노출
-    var eventBtnRow = document.getElementById('eventBtnRow');
-    if (eventBtnRow) eventBtnRow.style.display = anyActive ? 'flex' : 'none';
+      // parking button (available right after a 주차장 로깅 session, or any time nothing else is active)
+      var parkingBlocked = !!(activeRoadId || activeLotId);
+      btnParking.textContent = activeParkingId ? '주차 로깅 종료' : '주차 로깅 시작';
+      btnParking.className = 'log-btn' + (activeParkingId ? ' on-parking' : '') + (parkingBlocked ? ' blocked' : '');
+
+      // SPECIAL/아이 버튼은 어떤 로깅이든(일반도로/주차장/주차) 진행 중이면 노출
+      if (eventBtnRow) eventBtnRow.style.display = anyActive ? 'flex' : 'none';
+    }
 
     if (activeSceneId){
       dot.className = 'log-status-dot on';
@@ -1633,6 +1927,9 @@
     } else if (activeParkingId){
       dot.className = 'log-status-dot on';
       text.textContent = '주차 로깅 중';
+    } else if (trip){
+      dot.className = 'log-status-dot on';
+      text.textContent = trip.mode === 'rest' ? '휴식 중' : '주차 탐색 이동 중';
     } else if (activeRoadId){
       dot.className = 'log-status-dot on';
       text.textContent = '일반도로 로깅 중';
@@ -1642,11 +1939,13 @@
     }
 
     if (anyActive){
-      timer.style.display = 'inline';
+      timer.style.display = trip ? 'none' : 'inline'; // 트립 중엔 트립 패널 안의 leg별 타이머를 대신 보여줌
       updateTimerText();
       if (!timerInterval){
         timerInterval = setInterval(function(){
           updateTimerText();
+          var liveTrip = activeTripLog();
+          if (liveTrip) updateTripLegTimer(liveTrip);
           if (activeTab === 'logs') renderLogList();
         }, 1000);
       }
@@ -1966,6 +2265,13 @@
       if (btnVisited) btnVisited.classList.toggle('active', showVisited);
       renderMarkers();
     },
+    // '안 갔던 곳'(candidate=true) 후보 핀도 평소엔 숨겨두고, 버튼을 눌렀을 때만 지도에 보여줌.
+    toggleCandidatePins: function(){
+      showCandidates = !showCandidates;
+      var btnCandidates = document.getElementById('btnCandidates');
+      if (btnCandidates) btnCandidates.classList.toggle('active', showCandidates);
+      renderMarkers();
+    },
     startRename: function(id){
       renamingId = id;
       renderLogList();
@@ -2042,9 +2348,38 @@
       if (!log) return;
       if (!log.events) log.events = [];
       log.events.push({ type: kind, time: Date.now() });
+      // 트립 진행 중이면 지금 leg에도 같이 기록 — 리포트의 기존 SPECIAL/아이 컬럼은
+      // log.events 전체를 세므로(REPORT_HEADER는 건드리지 않음) 이 leg 기록은 집계용이 아니라
+      // 나중에 leg 단위로 특이사항을 다시 들여다볼 수 있게 남겨두는 용도.
+      var leg = currentLeg(log);
+      if (leg){
+        if (!leg.events) leg.events = [];
+        leg.events.push({ type: kind, time: Date.now() });
+      }
       saveLogs();
       pushLogToCloud(log);
-      showToast(kind === 'special' ? '⚠ SPECIAL 기록됨' : '🧒 아이 기록됨', 1200);
+      var tagMeta = TRIP_TAGS.find(function(t){ return t.key === kind; });
+      var msg = tagMeta ? (tagMeta.label + ' 기록됨') : (kind === 'special' ? '⚠ SPECIAL 기록됨' : kind === 'child' ? '🧒 아이 기록됨' : '기록됨');
+      showToast(msg, 1200);
+    },
+    confirmTripStart: function(){
+      var kmEl = document.getElementById('modalStartKm');
+      var ssdEl = document.getElementById('modalSsdInput');
+      var destEl = document.getElementById('modalFirstDest');
+      var opts = {
+        startKm: kmEl ? kmEl.value.trim() : '',
+        vehicle: tripModalVehicle,
+        ssd: ssdEl ? ssdEl.value.trim() : '',
+        firstDestination: destEl ? destEl.value.trim() : ''
+      };
+      closeModal();
+      startTrip(opts);
+    },
+    confirmTripLeg: function(outcome){
+      var el = document.getElementById('modalDestInput');
+      var dest = el ? el.value.trim() : '';
+      closeModal();
+      advanceTripLeg(outcome, dest);
     },
     startEdit: function(id){
       var spot = spots.find(function(s){ return s.id === id; });
@@ -2234,6 +2569,44 @@
     document.getElementById('btnChild').addEventListener('click', function(){
       AppMap.tapEvent('child');
     });
+
+    // ---- 주차 탐색 트립 ----
+    document.getElementById('btnTripStart').addEventListener('click', function(){
+      if (activeRoadId || activeLotId || activeParkingId){
+        showToast('다른 로깅이 진행 중이라 시작할 수 없어요. "로깅 기록"에서 먼저 종료해주세요.');
+        return;
+      }
+      openTripStartModal();
+    });
+    document.getElementById('btnTripRest').addEventListener('click', function(){ setTripMode('rest'); });
+    document.getElementById('btnTripDrive').addEventListener('click', function(){ setTripMode('drive'); });
+    document.getElementById('btnTripArrived').addEventListener('click', function(){ promptNextLegAndAdvance('arrived'); });
+    document.getElementById('btnTripPass').addEventListener('click', function(){ promptNextLegAndAdvance('passed'); });
+    document.getElementById('btnTripReturn').addEventListener('click', function(){ endTripReturned(); });
+    document.getElementById('tripMemo').addEventListener('input', function(e){
+      var log = activeTripLog();
+      var leg = currentLeg(log);
+      if (leg){ leg.memo = e.target.value; saveLogs(); }
+    });
+    document.getElementById('tripMemo').addEventListener('blur', function(){
+      var log = activeTripLog();
+      if (log) pushLogToCloud(log);
+    });
+    document.getElementById('tripNoSpot').addEventListener('change', function(e){
+      var log = activeTripLog();
+      var leg = currentLeg(log);
+      if (leg){ leg.noSpot = e.target.checked; saveLogs(); pushLogToCloud(log); }
+    });
+    var tripTagGrid = document.getElementById('tripTagGrid');
+    if (tripTagGrid){
+      tripTagGrid.innerHTML = TRIP_TAGS.map(function(t){
+        return '<button type="button" class="trip-tag-btn" data-tag="' + t.key + '">' + t.label + '</button>';
+      }).join('');
+      Array.prototype.forEach.call(tripTagGrid.querySelectorAll('.trip-tag-btn'), function(btn){
+        btn.addEventListener('click', function(){ AppMap.tapEvent(btn.getAttribute('data-tag')); });
+      });
+    }
+
     document.getElementById('btnDayEnd').addEventListener('click', function(){
       shareOrDownloadReport();
     });
@@ -2256,6 +2629,7 @@
     renderAll();
     drawSavedPaths();
     if (activeRoadId) startRoadTracking();
+    if (activeTripLog()) requestWakeLock(); // 트립 도중 새로고침/재접속됐어도 화면-꺼짐 방지를 다시 요청
     // 카카오맵 로드에 실패했으면(initMap 참고) loading 오버레이에 안내 문구가 떠 있는 상태이므로
     // 그대로 두고, 지도가 정상이면 가려서 앱을 보여준다.
     if (map) document.getElementById('loading').style.display = 'none';
