@@ -793,7 +793,7 @@
           <div class="trip-leg-dest" id="tripLegDest">목적지 미입력</div>
           <div class="trip-leg-timer" id="tripLegTimer">00:00</div>
           <div class="trip-mode-row">
-            <button type="button" class="trip-mode-btn" id="btnTripRest">☕ 휴식 시작</button>
+            <button type="button" class="trip-mode-btn" id="btnTripRest">🛑 주행 기록 정지</button>
             <button type="button" class="trip-mode-btn" id="btnTripDrive">🚗 주행 기록 시작</button>
           </div>
           <div class="trip-tag-grid" id="tripTagGrid"></div>
@@ -927,11 +927,8 @@
     { key: 'special',      label: '⚠ 특수차량' },
     { key: 'child',        label: '🧒 어린이' },
     { key: 'pm',           label: '🛴 PM' },
-    { key: 'illegal_park', label: '🚫 불법주정차' },
     { key: 'construction', label: '🚧 공사중' },
     { key: 'narrow_alley', label: '🛣 좁은 골목' },
-    { key: 'steep_slope',  label: '⛰ 급경사' },
-    { key: 'signal_wait',  label: '🚦 신호대기' },
     { key: 'pedestrian',   label: '🚶 보행자 많음' },
     { key: 'etc',          label: '❓ 기타' }
   ];
@@ -1638,8 +1635,9 @@
     requestWakeLock();
     renderLogPanel();
   }
-  // 휴식(rest)/주행(drive) 모드 전환 — activeRoadId는 그대로 두고 GPS watch만 껐다 켠다.
-  // 다시 켤 때 신호 간격이 20초(ROAD_GAP_MS)를 넘으면 buildPathSegments가 알아서 경로를 끊어 그려준다.
+  // 주행 기록 정지(rest)/시작(drive) 모드 전환 — activeRoadId는 그대로 두고 GPS watch만 껐다 켠다.
+  // 중간중간 작업 때문에 끊었다가 다시 시작해도, 다시 켤 때 신호 간격이 20초(ROAD_GAP_MS)를
+  // 넘으면 buildPathSegments가 알아서 경로를 끊어 그려준다.
   function setTripMode(mode){
     var log = activeTripLog();
     if (!log || log.mode === mode) return;
@@ -1992,7 +1990,7 @@
       text.textContent = '주차 로깅 중';
     } else if (trip){
       dot.className = 'log-status-dot on';
-      text.textContent = trip.mode === 'rest' ? '휴식 중' : '주차 탐색 이동 중';
+      text.textContent = trip.mode === 'rest' ? '주행 기록 정지됨' : '주차 탐색 이동 중';
     } else if (activeRoadId){
       dot.className = 'log-status-dot on';
       text.textContent = '일반도로 로깅 중';
@@ -2619,10 +2617,33 @@
     }
     if (view === 'map' && map){
       // the map container was display:none while another mobile tab was showing;
-      // 카카오맵도 컨테이너가 다시 보이면 크기를 재계산해줘야 함 (Leaflet의 invalidateSize와 동일한 역할)
-      setTimeout(function(){ map.relayout(); }, 50);
+      // 카카오맵도 컨테이너가 다시 보이면 크기를 재계산해줘야 함 (Leaflet의 invalidateSize와 동일한 역할).
+      // relayout()만으로는 (특히 아이폰 사파리에서) 크기만 다시 재고 타일은 다시 안 그려서
+      // 지도가 계속 회색/빈 화면으로 남는 경우가 있어, 중심 좌표를 한 번 다시 찍어서 확실히
+      // 다시 그리게 한다.
+      setTimeout(function(){
+        map.relayout();
+        map.setCenter(map.getCenter());
+      }, 100);
     }
   }
+  // 아이폰 사파리는 주소창/하단바가 나타나거나 사라질 때마다 실제 보이는 화면 높이(100vh)가
+  // 바뀌는데, 카카오맵은 그 순간을 스스로 알아채지 못해 지도가 잘리거나 안 보이는 상태로
+  // 남을 수 있다. 지도 탭이 화면에 있을 때는 크기/방향이 바뀔 때마다 relayout을 다시 걸어준다.
+  window.addEventListener('resize', function(){
+    if (mobileView === 'map' && map){
+      map.relayout();
+      map.setCenter(map.getCenter());
+    }
+  });
+  window.addEventListener('orientationchange', function(){
+    if (map){
+      setTimeout(function(){
+        map.relayout();
+        map.setCenter(map.getCenter());
+      }, 200);
+    }
+  });
 
   function bindControls(){
     document.getElementById('search').addEventListener('input', function(e){
