@@ -39,6 +39,7 @@
   #app{
     display: flex;
     height: 100vh;
+    height: 100dvh; /* 아이폰 사파리에서 주소창 유무에 따라 100vh가 실제 화면보다 커지는 문제 보정 */
     width: 100vw;
   }
 
@@ -616,7 +617,11 @@
   }
 
   /* ---------- Map ---------- */
-  #mapwrap{ flex: 1; position: relative; background: var(--concrete); }
+  /* 아이폰 사파리에서 100vh가 실제 화면 높이보다 커서 지도 아래쪽이 화면 밖으로 밀려나가는 경우가
+     있는데, 그 상태에서도 스크롤해서 가려진 부분까지 볼 수 있도록 세로 스크롤을 열어둔다.
+     지도 자체를 드래그해서 이동하는 동작은 카카오맵이 터치 이벤트를 직접 잡아 처리하므로
+     평소에는 이 스크롤이 발동하지 않는다. */
+  #mapwrap{ flex: 1; position: relative; background: var(--concrete); overflow-y: auto; -webkit-overflow-scrolling: touch; }
   #map{ height: 100%; width: 100%; }
   #loading{
     position: absolute; inset: 0;
@@ -717,8 +722,11 @@
 
   @media (max-width: 760px){
     html, body{ height: 100%; }
-    #app{ flex-direction: column; height: 100vh; }
-    #sidebar{ width: 100%; min-width: 0; border-right:none; flex: 1 1 auto; min-height: 0; }
+    #app{ flex-direction: column; height: 100vh; height: 100dvh; }
+    /* 로깅 패널(특히 트립 진행 중 목적지/태그/메모/종료 버튼들)이 화면보다 길어질 수 있어서,
+       사이드바 전체를 세로로 스크롤할 수 있게 해둔다 — 안의 #list도 자체 스크롤을 갖고 있지만
+       (중첩 스크롤), 로깅 패널 쪽이 넘칠 때는 이 바깥 스크롤이 나머지를 보여준다. */
+    #sidebar{ width: 100%; min-width: 0; border-right:none; flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
     #mapwrap{ flex: 1 1 auto; min-height: 0; }
     #tabs{ display: none; } /* replaced by #mobileNav on small screens */
 
