@@ -724,9 +724,14 @@
     html, body{ height: 100%; }
     #app{ flex-direction: column; height: 100vh; height: 100dvh; }
     /* 로깅 패널(특히 트립 진행 중 목적지/태그/메모/종료 버튼들)이 화면보다 길어질 수 있어서,
-       사이드바 전체를 세로로 스크롤할 수 있게 해둔다 — 안의 #list도 자체 스크롤을 갖고 있지만
-       (중첩 스크롤), 로깅 패널 쪽이 넘칠 때는 이 바깥 스크롤이 나머지를 보여준다. */
+       사이드바 전체를 세로로 스크롤할 수 있게 해둔다.
+       처음엔 #list(장소/로깅 목록)도 자체 overflow-y:auto를 따로 갖고 있었는데, 모바일 사파리에서는
+       스크롤 중인 손가락이 #list 위에 있으면 그 안쪽 스크롤에서 끝까지 내려가도(overscroll chaining이
+       안 먹혀서) 바깥 #sidebar 쪽으로 스크롤이 안 넘어가는 문제가 있었다 — 그래서 로깅을 시작해서
+       #list 내용이 길어지면 위쪽 헤더/통계/로깅 패널 쪽으로 다시는 스크롤해서 돌아갈 수 없었다.
+       중첩 스크롤 자체를 없애고, 모바일에서는 #sidebar 하나만 스크롤되도록 통일했다. */
     #sidebar{ width: 100%; min-width: 0; border-right:none; flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    #list{ flex: none; overflow-y: visible; }
     #mapwrap{ flex: 1 1 auto; min-height: 0; }
     #tabs{ display: none; } /* replaced by #mobileNav on small screens */
 
