@@ -524,6 +524,15 @@
   .log-event-label{ flex: 1; }
   .log-event-time{ font-variant-numeric: tabular-nums; }
 
+  .log-segment-item{
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px 5px 34px;
+    font-size: 12.5px; color: var(--blue);
+  }
+  .log-segment-icon{ flex-shrink: 0; }
+  .log-segment-label{ flex: 1; }
+  .log-segment-time{ font-variant-numeric: tabular-nums; }
+
   .geo-status{
     font-size: 11px; color: var(--ink-dim); margin-top: 8px;
   }
@@ -1127,6 +1136,7 @@
       if (l.startLng === undefined) l.startLng = null;
       if (l.address === undefined) l.address = '';
       if (l.highwayRoadNames === undefined) l.highwayRoadNames = [];
+      if (l.driveSegments === undefined) l.driveSegments = [];
       if (l.endTime === undefined) l.endTime = null;
       if (!l.endTime){
         if (l.type === 'road') activeRoadId = l.id;
@@ -1588,6 +1598,12 @@
     if (!id) return;
     var log = logs.find(function(l){ return l.id === id; });
     if (log) log.endTime = Date.now();
+    // 트립이 "주행 기록 시작" 상태로 끝나는 경우, 마지막 구간을 종료 시각으로 닫아준다
+    // (정지 버튼을 마지막에 안 눌러도 구간이 열린 채로 남지 않도록).
+    if (log && log.driveSegments && log.driveSegments.length){
+      var lastSeg = log.driveSegments[log.driveSegments.length - 1];
+      if (lastSeg.end === null) lastSeg.end = log.endTime;
+    }
     if (type === 'road'){ activeRoadId = null; stopRoadTracking(); releaseWakeLock(); }
     if (type === 'parking'){ activeParkingId = null; }
     if (type === 'parking_lot'){
@@ -1641,6 +1657,9 @@
     log.vehicle = opts.vehicle || '';
     log.startKm = opts.startKm || '';
     log.mode = 'drive';
+    // 주행 기록을 시작/정지로 몇 번을 끊었다 이어붙이든, 각 구간의 정확한 시작~종료 시각을 남겨서
+    // "지난 기록"에서 출발~도착 전체 시간과 별도로 실제 주행한 구간들을 확인할 수 있게 한다.
+    log.driveSegments = [ { start: log.startTime, end: null } ];
     log.legs = [ newLeg(opts.firstDestination || '') ];
     tripPanelLegId = null;
     saveLogs();
@@ -1654,11 +1673,22 @@
   function setTripMode(mode){
     var log = activeTripLog();
     if (!log || log.mode === mode) return;
+    var now = Date.now();
+    if (!log.driveSegments) log.driveSegments = [];
+    if (mode === 'rest'){
+      // 주행 기록 정지: 지금 열려 있는 구간을 이 시각으로 닫는다
+      var openSeg = log.driveSegments.length ? log.driveSegments[log.driveSegments.length - 1] : null;
+      if (openSeg && openSeg.end === null) openSeg.end = now;
+    } else {
+      // 주행 기록 시작: 새 구간을 연다
+      log.driveSegments.push({ start: now, end: null });
+    }
     log.mode = mode;
     if (mode === 'rest') stopRoadTracking(); else startRoadTracking();
     saveLogs();
     pushLogToCloud(log);
     renderLogPanel();
+    renderLogList();
   }
   // 주차장 도착 / 경유: 현재 leg를 종료하고 다음 목적지를 물어본 뒤 새 leg를 이어붙인다(트립은 계속 진행).
   function promptNextLegAndAdvance(outcome){
@@ -2258,6 +2288,17 @@
       '<span class="log-event-time">' + formatTimeHMS(e.time) + '</span>' +
     '</div>';
   }
+  // 트립 안에서 "주행 기록 시작/정지"를 여러 번 끊어서 했을 때, 각 구간의 정확한 시작~종료 시각을
+  // 별도 줄로 보여준다(예: "🚙 주행 기록  09:00:00 → 09:05:00"). 구간이 하나뿐이면 위쪽의 전체
+  // 출발~도착 줄과 내용이 겹치므로(끊은 적이 없다는 뜻) 그때는 따로 표시하지 않는다.
+  function renderSegmentRow(seg){
+    var endText = seg.end === null ? '진행 중' : formatTimeHMS(seg.end);
+    return '<div class="log-segment-item">' +
+      '<span class="log-segment-icon">🚙</span>' +
+      '<span class="log-segment-label">주행 기록</span>' +
+      '<span class="log-segment-time">' + formatTimeHMS(seg.start) + ' → ' + endText + '</span>' +
+    '</div>';
+  }
   function renderLogList(){
     var list = document.getElementById('list');
     var now = Date.now();
@@ -2291,6 +2332,12 @@
       (l.events || []).forEach(function(e){
         g.items.push({ kind: 'event', time: e.time, event: e });
       });
+      // 구간이 2개 이상일 때만(=한 번이라도 끊었을 때만) 개별 구간을 보여준다.
+      if (l.driveSegments && l.driveSegments.length > 1){
+        l.driveSegments.forEach(function(seg){
+          g.items.push({ kind: 'segment', time: seg.start, seg: seg });
+        });
+      }
     });
     groups.forEach(function(g){
       g.items.sort(function(a, b){ return b.time - a.time; });
@@ -2298,7 +2345,9 @@
 
     list.innerHTML = toggleHtml + groups.map(function(g){
       var rowsHtml = g.items.map(function(it){
-        return it.kind === 'event' ? renderEventRow(it.event) : renderLogRow(it.log);
+        if (it.kind === 'event') return renderEventRow(it.event);
+        if (it.kind === 'segment') return renderSegmentRow(it.seg);
+        return renderLogRow(it.log);
       }).join('');
       return '<div class="log-date-header">' + formatDateHeader(g.dateMs) + '</div>' + rowsHtml;
     }).join('');
