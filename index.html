@@ -1600,13 +1600,18 @@
       })
       .catch(function(){ /* 오프라인 등 — 무시 */ });
   }
-  // 고속도로 로깅 중 현재 위치를 주기적으로 역지오코딩해서 "OO고속도로" 같은 구간명을 자동으로
-  // 알아내 본다(리포트의 "고속도로" 칸용). Nominatim(OpenStreetMap) 데이터에 도로명이 없거나
-  // 다르게 표기돼 있으면 인식되지 않을 수 있는 최선 노력(best-effort) 기능 — 실패해도 로깅 자체는
-  // 그대로 계속되고, 그 구간의 칸만 비게 된다.
+  // 주행 중 현재 위치를 주기적으로 역지오코딩해서 "OO대로"/"OO고속도로" 같은 도로명을 자동으로
+  // 알아내 본다(리포트의 "고속도로" 칸용 — 고속도로든 일반 도로든 인식된 이름을 전부 남겨서,
+  // 나중에 리포트를 주행 구간별로 쪼갤 때 그 구간에 해당하는 도로명만 골라 보여줄 수 있게 함).
+  // {name, time} 형태로 시각까지 같이 저장한다. Nominatim(OpenStreetMap) 데이터에 도로명이
+  // 없거나 다르게 표기돼 있으면 인식되지 않을 수 있는 최선 노력(best-effort) 기능 — 실패해도
+  // 로깅 자체는 그대로 계속되고, 그 구간의 칸만 비게 된다.
   var HIGHWAY_SAMPLE_INTERVAL_MS = 45000;
+  function roadNameOf(entry){ return (typeof entry === 'string') ? entry : ((entry && entry.name) || ''); }
+  function roadTimeOf(entry){ return (typeof entry === 'string') ? null : ((entry && entry.time) || null); }
+  function roadNamesContainHighway(str){ return !!str && (str.indexOf('고속도로') !== -1 || str.indexOf('고속화도로') !== -1); }
   function maybeSampleHighwayRoad(log){
-    if (!log || !log.highway) return;
+    if (!log) return;
     var now = Date.now();
     var last = highwaySampleTimestamps[log.id] || 0;
     if (now - last < HIGHWAY_SAMPLE_INTERVAL_MS) return;
@@ -1622,16 +1627,30 @@
         var addr = data && data.address;
         var roadName = addr ? (addr.road || addr.trunk || addr.motorway || '') : '';
         if (!roadName) return;
-        if (roadName.indexOf('고속도로') === -1 && roadName.indexOf('고속화도로') === -1) return; // 고속도로 이름으로 보이지 않으면 무시
         if (!log.highwayRoadNames) log.highwayRoadNames = [];
-        var lastName = log.highwayRoadNames.length ? log.highwayRoadNames[log.highwayRoadNames.length - 1] : null;
-        if (roadName !== lastName){
-          log.highwayRoadNames.push(roadName);
+        var lastEntry = log.highwayRoadNames.length ? log.highwayRoadNames[log.highwayRoadNames.length - 1] : null;
+        if (roadNameOf(lastEntry) !== roadName){
+          log.highwayRoadNames.push({ name: roadName, time: Date.now() });
           saveLogs();
           pushLogToCloud(log);
         }
       })
       .catch(function(){ /* 실패해도 무시 — 리포트의 구간명 칸만 비게 됨 */ });
+  }
+  // 이 log(l)의 [rowStart, rowEnd] 구간 동안 인식된 도로명들만 골라 이어붙인다. 시각 정보가 없는
+  // 옛날 형식(문자열만 저장돼 있던 기록)은 어느 구간 것인지 알 수 없으니 모든 구간에 포함시킨다.
+  function roadNamesForWindow(log, rowStart, rowEnd){
+    var entries = log.highwayRoadNames || [];
+    var end = rowEnd || Date.now();
+    var names = [];
+    entries.forEach(function(entry){
+      var name = roadNameOf(entry);
+      if (!name) return;
+      var t = roadTimeOf(entry);
+      if (t !== null && (t < rowStart || t > end)) return;
+      if (names.length === 0 || names[names.length - 1] !== name) names.push(name);
+    });
+    return names.join(' → ');
   }
   function stopLog(type){
     var id = type === 'road' ? activeRoadId : type === 'parking_lot' ? activeLotId : type === 'parking' ? activeParkingId : activeSceneId;
@@ -2415,30 +2434,68 @@
     }
     return log.legs[log.legs.length - 1];
   }
+  var SEGMENT_MERGE_GAP_MS = 30 * 60 * 1000; // 같은 목적지로 가는 주행 구간이라도 30분 이상 비면 다른 줄로 나눔
+  var SEGMENT_MIN_DURATION_MS = 60 * 1000;   // 1분이 안 되는 구간은 리포트에서 뺌(끊어 찍은 잡음성 구간)
+  // 도로 환경(고속도로/일반도로)은 이제 트립 시작할 때 고른 고정값이 아니라, 그 구간에서 실제로
+  // 인식된 도로명에 "고속도로"가 들어있는지로 구간별로 판단한다. 인식된 도로명이 아예 없을 때만
+  // (예: 역지오코딩 실패) 트립 시작 시 고른 값으로 되돌아간다.
+  function envForRoadNames(l, roadNames){
+    if (roadNamesContainHighway(roadNames)) return '고속도로';
+    if (roadNames) return '일반도로';
+    return l.highway ? '고속도로' : '일반도로';
+  }
   function buildReportRows(dayLogs){
     var rows = [];
     dayLogs.forEach(function(l){
       var isRoad = l.type === 'road';
-      var env = isRoad ? (l.highway ? '고속도로' : '일반도로') : '주차장';
-      // 고속도로 구간명: 고속도로 로깅 중 GPS 위치를 바탕으로 자동 인식된 구간명들("OO고속도로 → OO고속도로").
-      // 역지오코딩 결과에 따라 비어 있을 수 있다(최선 노력 기능). 구간별 타임스탬프가 없어 어느 줄에
-      // 넣어도 정확히 매칭은 안 되므로, 트립 전체에서 인식된 이름을 모든 줄에 동일하게 넣어둔다.
-      var highwayNames = (isRoad && l.highway && l.highwayRoadNames && l.highwayRoadNames.length)
-        ? l.highwayRoadNames.join(' → ') : '';
       var driveSegs = (isRoad && l.driveSegments && l.driveSegments.length) ? l.driveSegments : null;
+
       if (!driveSegs){
         // 트립이 아니거나(또는 트립이어도 주행 시작/정지를 나눈 적이 없으면) 로깅 전체를 한 줄로.
-        rows.push(buildReportRow(l, l.startTime, l.endTime, isRoad, env, highwayNames, null));
-      } else {
-        // 트립 안에서 "주행 기록 시작~정지"를 여러 번 오간 경우 — 그 구간마다 줄을 따로 만들어서
-        // "12:00~12:10", "12:12~12:16"처럼 실제로 로깅한 시간 단위로 SPECIAL/아이를 정확히 반영한다.
-        driveSegs.forEach(function(seg){
-          var segEnd = (seg.end === null || seg.end === undefined) ? l.endTime : seg.end;
-          var leg = legForTimestamp(l, seg.start);
-          var location = '이동 (' + (leg && leg.destination ? leg.destination : '목적지 미입력') + ')';
-          rows.push(buildReportRow(l, seg.start, segEnd, isRoad, env, highwayNames, location));
-        });
+        var wholeRoadNames = isRoad ? roadNamesForWindow(l, l.startTime, l.endTime) : '';
+        var wholeEnv = isRoad ? envForRoadNames(l, wholeRoadNames) : '주차장';
+        // 주차장/주차 로깅의 "고속도로" 칸엔 도로명 대신 그 건물의 주소지(역지오코딩 결과)를 넣는다.
+        var wholeHighwayCol = isRoad ? wholeRoadNames : (l.address || '');
+        rows.push(buildReportRow(l, l.startTime, l.endTime, isRoad, wholeEnv, wholeHighwayCol, null));
+        return;
       }
+
+      // 트립 안에서 "주행 기록 시작~정지"를 여러 번 오간 경우 — 같은 목적지로 가는 도중 잠깐씩
+      // 끊었다 이어간 구간들은 한 줄로 묶고(처음 시작~마지막 종료 시각), 목적지가 바뀌었거나
+      // 30분 이상 비어 있으면 새 줄로 나눈다. 1분이 안 되는 짧은 구간은 아예 제외한다.
+      var resolvedSegs = driveSegs.map(function(seg){
+        return { start: seg.start, end: (seg.end === null || seg.end === undefined) ? l.endTime : seg.end };
+      }).filter(function(seg){ return (seg.end - seg.start) >= SEGMENT_MIN_DURATION_MS; });
+
+      if (!resolvedSegs.length){
+        // 전부 너무 짧은 구간뿐이었다면(드문 예외) 그래도 트립 자체가 리포트에서 통째로 빠지지
+        // 않도록 전체를 한 줄로 남긴다.
+        var fallbackRoadNames = roadNamesForWindow(l, l.startTime, l.endTime);
+        rows.push(buildReportRow(l, l.startTime, l.endTime, isRoad, envForRoadNames(l, fallbackRoadNames), fallbackRoadNames, null));
+        return;
+      }
+
+      var groups = [];
+      resolvedSegs.forEach(function(seg){
+        var leg = legForTimestamp(l, seg.start);
+        var lastGroup = groups.length ? groups[groups.length - 1] : null;
+        if (lastGroup && lastGroup.leg === leg && (seg.start - lastGroup.end) < SEGMENT_MERGE_GAP_MS){
+          lastGroup.end = seg.end; // 이전 구간과 이어붙임(마지막 종료 시각만 갱신)
+        } else {
+          groups.push({ leg: leg, start: seg.start, end: seg.end });
+        }
+      });
+
+      groups.forEach(function(g){
+        var legIndex = g.leg ? l.legs.indexOf(g.leg) : -1;
+        // 첫 목적지로 가는 구간의 출발지는 "사무실"로 기본 표기(트립은 보통 사무실에서 출발하므로),
+        // 그 다음부터는 직전 목적지 → 이번 목적지 순으로 표기한다.
+        var fromLabel = legIndex <= 0 ? '사무실' : (l.legs[legIndex - 1].destination || '이전 목적지');
+        var toLabel = (g.leg && g.leg.destination) ? g.leg.destination : '목적지 미입력';
+        var location = '이동 (' + fromLabel + ' → ' + toLabel + ')';
+        var roadNames = roadNamesForWindow(l, g.start, g.end);
+        rows.push(buildReportRow(l, g.start, g.end, isRoad, envForRoadNames(l, roadNames), roadNames, location));
+      });
     });
     // No 컬럼: 리포트 전체에서 1부터 순서대로 매긴 일련번호(엑셀에서 구간이 여러 줄로 늘어나도
     // 몇 번째 줄인지 바로 알아볼 수 있게).
@@ -2464,20 +2521,26 @@
     var csv = rowsToCsv(buildReportRows(dayLogs));
     var fileName = '로깅기록_' + todayStr + '.csv';
     var file = new File([csv], fileName, { type: 'text/csv' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })){
+    // 윈도우/맥 데스크톱의 Edge·Chrome도 navigator.share를 지원해서 파일 공유 시트가 뜨는데,
+    // 데스크톱에선 그 시트에 "내 PC에 저장"/엑셀로 바로 열기 옵션이 없어 오히려 불편하다
+    // (앱 목록만 나옴). 그래서 데스크톱에서는 공유 시트 대신 바로 파일 다운로드로 보내서
+    // 다운로드 폴더에서 더블클릭하면 엑셀로 바로 열리게 한다 — 휴대폰(아이폰/안드로이드)에서만
+    // 공유 시트를 띄워 메일 앱에 파일이 첨부된 채로 넘어가게 한다.
+    var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+    if (isMobile && navigator.canShare && navigator.canShare({ files: [file] })){
       navigator.share({
         files: [file],
         title: '로깅 리포트 ' + todayStr,
         text: '오늘 로깅 리포트예요. 메일 앱에서 받는사람에 본인 메일 주소를 입력해 보내주세요.'
       }).catch(function(){ /* 사용자가 공유 시트를 취소한 경우 — 아무 것도 안 함 */ });
     } else {
-      // 공유 시트를 지원하지 않는 환경(데스크톱 등)을 위한 대체: 그냥 파일 다운로드
+      // 데스크톱(그리고 공유 시트를 지원하지 않는 환경)에서는 그냥 파일 다운로드
       var url = URL.createObjectURL(file);
       var a = document.createElement('a');
       a.href = url; a.download = fileName;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
-      showToast('리포트 파일을 다운로드했어요.');
+      showToast('리포트 파일을 다운로드했어요. 다운로드 폴더에서 열어보세요.');
     }
   }
 
