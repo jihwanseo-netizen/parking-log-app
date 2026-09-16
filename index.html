@@ -52,6 +52,14 @@
     flex-direction: column;
     border-right: 1px solid var(--line);
     z-index: 10;
+    /* 주행 기록 시작 등으로 로깅 패널(trip-panel)이 길어지면 사이드바 전체 내용이
+       화면 높이(100dvh)를 넘어설 수 있다. 예전에는 #list만 자체 overflow-y:auto를
+       가져서, 사이드바 자체는 스크롤이 안 되고 #list 안쪽만 스크롤되는 중첩 스크롤
+       구조였다 — 그러면 #list 위쪽에 있는 로깅 패널(trip-panel)이 화면 아래로 밀려나가도
+       스크롤로 다시 볼 방법이 없었다. #list의 자체 스크롤을 없애고(아래) 사이드바 하나만
+       스크롤되도록 통일한다. */
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
   .hazard-strip{
     height: 8px;
@@ -177,8 +185,8 @@
     color: #1A1C1F;
   }
   #list{
-    flex: 1;
-    overflow-y: auto;
+    flex: none;
+    overflow-y: visible;
     padding: 6px 12px 14px 12px;
   }
   .item{
