@@ -389,6 +389,7 @@
   .trip-mode-btn-break{ background: var(--orange); }
   .trip-mode-btn-lot{ background: #0E9F6E; }
   .trip-mode-btn-park{ background: #7C5CFC; }
+  .trip-mode-btn-leave{ background: var(--gray); }
   .trip-mode-btn.active{ box-shadow: 0 0 0 2px rgba(255,255,255,0.65) inset; }
   .trip-rest-timer{
     margin-top: 8px;
@@ -402,7 +403,6 @@
     font-variant-numeric: tabular-nums;
     text-align: center;
   }
-  .trip-leave-btn{ margin-top: 8px; width: 100%; }
   /* 주차장 기록/주차 기록 중 표시 — 휴식 타이머(주황색)와 구분되게 청록색 계열로 */
   #tripLotRecordTimer{ background: rgba(14,159,110,0.15); border-color: #0E9F6E; color: #0E9F6E; }
   .trip-tag-grid{
@@ -854,9 +854,9 @@
           <div class="trip-mode-row" id="tripLotRow" style="display:none;">
             <button type="button" class="trip-mode-btn trip-mode-btn-lot" id="btnLotRecord">🅿️ 주차장 기록 시작</button>
             <button type="button" class="trip-mode-btn trip-mode-btn-park" id="btnParkRecord">🚙 주차 기록 시작</button>
+            <button type="button" class="trip-mode-btn trip-mode-btn-leave" id="btnTripLeaveLot" style="display:none;">🚪 주차장에서 나옴 (다음 장소로 이동 시작)</button>
           </div>
           <div class="trip-rest-timer" id="tripLotRecordTimer" style="display:none;"></div>
-          <button type="button" class="btn-secondary trip-leave-btn" id="btnTripLeaveLot" style="display:none;">🚪 주차장에서 나옴 (다음 장소로 이동 시작)</button>
         </div>
       </div>
       <div class="geo-status" id="geoStatus" style="display:none;"></div>
