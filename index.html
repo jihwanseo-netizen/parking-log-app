@@ -371,20 +371,35 @@
   }
   .trip-leg-dest{ font-size: 14px; font-weight: 800; color: var(--ink); }
   .trip-leg-timer{ font-size: 22px; font-weight: 800; color: var(--yellow); font-variant-numeric: tabular-nums; margin-top: 2px; }
-  .trip-mode-row{ display: flex; gap: 8px; margin-top: 10px; }
+  /* 주행 기록 시작/정지, 휴식 시작 — "주차장 도착" 버튼(.trip-exit-row button)과 같은 크기로
+     세로로 쌓고, 각각 파란색/빨간색/주황색으로 항상 구분되게 칠해둔다. */
+  .trip-mode-row{ display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
   .trip-mode-btn{
-    flex: 1;
-    background: var(--asphalt);
-    border: 1px solid var(--line);
-    color: var(--ink);
-    padding: 9px 8px;
-    border-radius: 8px;
+    padding: 10px 0;
+    border: none;
+    border-radius: 7px;
+    color: #fff;
     font-weight: 700;
     font-size: 12.5px;
     cursor: pointer;
     font-family: inherit;
   }
-  .trip-mode-btn.active{ background: var(--orange); border-color: var(--orange); color: #fff; }
+  .trip-mode-btn-drive{ background: var(--blue); }
+  .trip-mode-btn-stop{ background: #E5484D; }
+  .trip-mode-btn-break{ background: var(--orange); }
+  .trip-mode-btn.active{ box-shadow: 0 0 0 2px rgba(255,255,255,0.65) inset; }
+  .trip-rest-timer{
+    margin-top: 8px;
+    padding: 8px 10px;
+    background: rgba(217,115,29,0.15);
+    border: 1px solid var(--orange);
+    border-radius: 7px;
+    color: var(--orange);
+    font-weight: 700;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
   .trip-tag-grid{
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -532,6 +547,7 @@
   .log-segment-icon{ flex-shrink: 0; }
   .log-segment-label{ flex: 1; }
   .log-segment-time{ font-variant-numeric: tabular-nums; }
+  .log-segment-item-rest{ color: var(--orange); }
 
   .geo-status{
     font-size: 11px; color: var(--ink-dim); margin-top: 8px;
@@ -815,9 +831,10 @@
           <div class="trip-leg-dest" id="tripLegDest">목적지 미입력</div>
           <div class="trip-leg-timer" id="tripLegTimer">00:00</div>
           <div class="trip-mode-row">
-            <button type="button" class="trip-mode-btn" id="btnTripRest">🛑 주행 기록 정지</button>
-            <button type="button" class="trip-mode-btn" id="btnTripDrive">🚗 주행 기록 시작</button>
+            <button type="button" class="trip-mode-btn trip-mode-btn-drive" id="btnTripDriveToggle">🚗 주행 기록 시작</button>
+            <button type="button" class="trip-mode-btn trip-mode-btn-break" id="btnTripBreak" style="display:none;">☕ 휴식 시작</button>
           </div>
+          <div class="trip-rest-timer" id="tripRestTimer" style="display:none;"></div>
           <div class="trip-tag-grid" id="tripTagGrid"></div>
           <label class="modal-field-label">메모</label>
           <textarea id="tripMemo" placeholder="특이사항을 적어주세요 (선택)"></textarea>
@@ -1137,6 +1154,7 @@
       if (l.address === undefined) l.address = '';
       if (l.highwayRoadNames === undefined) l.highwayRoadNames = [];
       if (l.driveSegments === undefined) l.driveSegments = [];
+      if (l.restSegments === undefined) l.restSegments = [];
       if (l.endTime === undefined) l.endTime = null;
       if (!l.endTime){
         if (l.type === 'road') activeRoadId = l.id;
@@ -1517,7 +1535,9 @@
     };
     if (type === 'road') log.path = [];
     logs.push(log);
-    if (type === 'road'){ activeRoadId = log.id; startRoadTracking(); }
+    // 트립(주차 탐색)은 시작하자마자 바로 주행 기록에 들어가지 않고, "주행 기록 시작"을 직접
+    // 눌러야 GPS 추적이 시작되게 하려고 extra.deferTracking으로 자동 추적 시작을 건너뛸 수 있게 함.
+    if (type === 'road'){ activeRoadId = log.id; if (!extra.deferTracking) startRoadTracking(); }
     if (type === 'parking_lot') activeLotId = log.id;
     if (type === 'parking') activeParkingId = log.id;
     if (type === 'parking_scene') activeSceneId = log.id;
@@ -1598,11 +1618,15 @@
     if (!id) return;
     var log = logs.find(function(l){ return l.id === id; });
     if (log) log.endTime = Date.now();
-    // 트립이 "주행 기록 시작" 상태로 끝나는 경우, 마지막 구간을 종료 시각으로 닫아준다
-    // (정지 버튼을 마지막에 안 눌러도 구간이 열린 채로 남지 않도록).
+    // 트립이 "주행 기록 시작"이나 "휴식 시작" 상태로 끝나는 경우, 마지막 구간을 종료 시각으로
+    // 닫아준다(정지 버튼을 마지막에 안 눌러도 구간이 열린 채로 남지 않도록).
     if (log && log.driveSegments && log.driveSegments.length){
-      var lastSeg = log.driveSegments[log.driveSegments.length - 1];
-      if (lastSeg.end === null) lastSeg.end = log.endTime;
+      var lastDriveSeg = log.driveSegments[log.driveSegments.length - 1];
+      if (lastDriveSeg.end === null) lastDriveSeg.end = log.endTime;
+    }
+    if (log && log.restSegments && log.restSegments.length){
+      var lastRestSeg = log.restSegments[log.restSegments.length - 1];
+      if (lastRestSeg.end === null) lastRestSeg.end = log.endTime;
     }
     if (type === 'road'){ activeRoadId = null; stopRoadTracking(); releaseWakeLock(); }
     if (type === 'parking'){ activeParkingId = null; }
@@ -1653,13 +1677,18 @@
     opts = opts || {};
     if (opts.ssd){ try { localStorage.setItem('lastSSD', opts.ssd); } catch(e){} }
     if (opts.driver){ try { localStorage.setItem('lastDriver', opts.driver); } catch(e){} }
-    var log = startLog('road', '주차 탐색', { ssd: opts.ssd, driver: opts.driver, highway: false });
+    // 트립을 시작해도 곧바로 주행 기록(GPS 추적)이 시작되지 않고, "주행 기록 시작"을 직접 눌러야
+    // 시작되게 한다(deferTracking) — 출발 준비하는 동안 실수로 기록되는 걸 막기 위함.
+    var log = startLog('road', '주차 탐색', { ssd: opts.ssd, driver: opts.driver, highway: false, deferTracking: true });
     log.vehicle = opts.vehicle || '';
     log.startKm = opts.startKm || '';
-    log.mode = 'drive';
-    // 주행 기록을 시작/정지로 몇 번을 끊었다 이어붙이든, 각 구간의 정확한 시작~종료 시각을 남겨서
-    // "지난 기록"에서 출발~도착 전체 시간과 별도로 실제 주행한 구간들을 확인할 수 있게 한다.
-    log.driveSegments = [ { start: log.startTime, end: null } ];
+    // 'drive'/'stopped'/'rest' 중 어느 것도 아닌 대기 상태 — "주행 기록 시작"을 눌러야
+    // 비로소 'drive'로 넘어간다("정지됨"과는 다른, 아직 한 번도 시작 안 한 상태라서 구분해둠).
+    log.mode = null;
+    // 주행 기록 시작/정지, 휴식 시작을 몇 번을 오가든 각 구간의 정확한 시작~종료 시각을 남겨서
+    // "지난 기록"에서 출발~도착 전체 시간과 별도로 실제 주행/휴식 구간들을 확인할 수 있게 한다.
+    log.driveSegments = [];
+    log.restSegments = [];
     log.legs = [ newLeg(opts.firstDestination || '') ];
     tripPanelLegId = null;
     saveLogs();
@@ -1667,24 +1696,34 @@
     requestWakeLock();
     renderLogPanel();
   }
-  // 주행 기록 정지(rest)/시작(drive) 모드 전환 — activeRoadId는 그대로 두고 GPS watch만 껐다 켠다.
-  // 중간중간 작업 때문에 끊었다가 다시 시작해도, 다시 켤 때 신호 간격이 20초(ROAD_GAP_MS)를
-  // 넘으면 buildPathSegments가 알아서 경로를 끊어 그려준다.
+  // 주행 기록 시작(drive) / 정지(stopped) / 휴식 시작(rest) 모드 전환 — activeRoadId는 그대로 두고
+  // GPS watch만 상태에 따라 껐다 켠다. 중간중간 끊었다가 다시 시작해도, 다시 켤 때 신호 간격이
+  // 20초(ROAD_GAP_MS)를 넘으면 buildPathSegments가 알아서 경로를 끊어 그려준다.
   function setTripMode(mode){
     var log = activeTripLog();
     if (!log || log.mode === mode) return;
     var now = Date.now();
     if (!log.driveSegments) log.driveSegments = [];
-    if (mode === 'rest'){
-      // 주행 기록 정지: 지금 열려 있는 구간을 이 시각으로 닫는다
-      var openSeg = log.driveSegments.length ? log.driveSegments[log.driveSegments.length - 1] : null;
-      if (openSeg && openSeg.end === null) openSeg.end = now;
-    } else {
-      // 주행 기록 시작: 새 구간을 연다
+    if (!log.restSegments) log.restSegments = [];
+    // 이전 모드에서 열려 있던 구간이 있으면 지금 시각으로 닫는다
+    if (log.mode === 'drive'){
+      var openDrive = log.driveSegments.length ? log.driveSegments[log.driveSegments.length - 1] : null;
+      if (openDrive && openDrive.end === null) openDrive.end = now;
+    } else if (log.mode === 'rest'){
+      var openRest = log.restSegments.length ? log.restSegments[log.restSegments.length - 1] : null;
+      if (openRest && openRest.end === null) openRest.end = now;
+    }
+    // 새 모드에 맞는 구간을 열고, GPS 추적을 그 모드에 맞게 켜거나 끈다
+    if (mode === 'drive'){
       log.driveSegments.push({ start: now, end: null });
+      startRoadTracking();
+    } else if (mode === 'rest'){
+      log.restSegments.push({ start: now, end: null });
+      stopRoadTracking();
+    } else { // 'stopped'
+      stopRoadTracking();
     }
     log.mode = mode;
-    if (mode === 'rest') stopRoadTracking(); else startRoadTracking();
     saveLogs();
     pushLogToCloud(log);
     renderLogPanel();
@@ -1692,9 +1731,11 @@
   }
   // 주차장 도착 / 경유: 현재 leg를 종료하고 다음 목적지를 물어본 뒤 새 leg를 이어붙인다(트립은 계속 진행).
   function promptNextLegAndAdvance(outcome){
+    var log = activeTripLog();
+    var nextLegNo = (log && log.legs) ? log.legs.length + 1 : 1;
     openModal(
       '<h3>' + (outcome === 'arrived' ? '주차장 도착' : '경유 · 다음 목적지') + '</h3>' +
-      '<label class="modal-field-label">다음 목적지 (선택)</label>' +
+      '<label class="modal-field-label">' + nextLegNo + '번 목적지 (선택)</label>' +
       '<input type="text" id="modalDestInput" placeholder="예: 강남파이낸스센터" />' +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
@@ -1728,12 +1769,28 @@
   function renderTripPanel(log){
     var leg = currentLeg(log);
     if (!leg) return;
+    var legNo = log.legs.length; // 지금 leg가 몇 번째 목적지인지(1번, 2번...)
     var destEl = document.getElementById('tripLegDest');
-    if (destEl) destEl.textContent = leg.destination ? ('목적지: ' + leg.destination) : '목적지 미입력';
-    var restBtn = document.getElementById('btnTripRest');
-    var driveBtn = document.getElementById('btnTripDrive');
-    if (restBtn) restBtn.classList.toggle('active', log.mode === 'rest');
-    if (driveBtn) driveBtn.classList.toggle('active', log.mode !== 'rest');
+    if (destEl) destEl.textContent = leg.destination ? (legNo + '번 목적지: ' + leg.destination) : (legNo + '번 목적지 미입력');
+    var toggleBtn = document.getElementById('btnTripDriveToggle');
+    var breakBtn = document.getElementById('btnTripBreak');
+    var isDriving = log.mode === 'drive';
+    var isResting = log.mode === 'rest';
+    // 주행 기록 시작/정지는 버튼 하나가 스스로 이름을 바꾸는 토글 방식. 휴식 중에는 주행 관련
+    // 버튼 자체를 숨겨서 "휴식 종료"만 조작할 수 있게 한다(휴식 중엔 주행 시작/정지가 의미 없음).
+    if (toggleBtn){
+      toggleBtn.style.display = isResting ? 'none' : '';
+      toggleBtn.textContent = isDriving ? '🛑 주행 기록 정지' : '🚗 주행 기록 시작';
+      toggleBtn.classList.toggle('trip-mode-btn-drive', !isDriving);
+      toggleBtn.classList.toggle('trip-mode-btn-stop', isDriving);
+    }
+    // 휴식 버튼: "주행 중"이거나 아직 한 번도 정지한 적 없는 최초 대기 상태(mode === null)엔 숨김.
+    // 정지 상태(stopped)면 "휴식 시작"으로, 휴식 중(rest)이면 "휴식 종료"로 스스로 바뀐다.
+    if (breakBtn){
+      breakBtn.style.display = (log.mode === 'stopped' || isResting) ? '' : 'none';
+      breakBtn.textContent = isResting ? '🏁 휴식 종료' : '☕ 휴식 시작';
+      breakBtn.classList.toggle('active', isResting);
+    }
     // leg가 바뀐 시점에만 메모/체크박스를 다시 채운다 — 매초 렌더링될 때마다 덮어쓰면
     // 사용자가 타이핑/체크하는 도중 값이 계속 되돌아가 버리는 문제가 생기기 때문.
     if (leg.id !== tripPanelLegId){
@@ -1744,12 +1801,26 @@
       if (noSpotEl) noSpotEl.checked = !!leg.noSpot;
     }
     updateTripLegTimer(log);
+    updateTripRestTimer(log);
   }
   function updateTripLegTimer(log){
     var leg = currentLeg(log);
     var timerEl = document.getElementById('tripLegTimer');
     if (!leg || !timerEl) return;
     timerEl.textContent = formatDuration(Date.now() - leg.startTime);
+  }
+  // 휴식 시작을 누른 순간부터 "몇시부터 몇분 몇초째 쉬고 있는지" 실시간으로 보여준다.
+  function updateTripRestTimer(log){
+    var el = document.getElementById('tripRestTimer');
+    if (!el) return;
+    var openRest = (log && log.mode === 'rest' && log.restSegments && log.restSegments.length)
+      ? log.restSegments[log.restSegments.length - 1] : null;
+    if (!openRest || openRest.end !== null){
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = '';
+    el.textContent = '☕ ' + formatHM(openRest.start) + '부터 ' + formatDuration(Date.now() - openRest.start) + '째 휴식 중';
   }
   // Wake Lock: 화면이 꺼지지 않게만 해줌 — 폰을 잠그거나 다른 앱으로 전환하면 iOS/안드로이드 모두
   // 이 웹앱의 백그라운드 실행 자체를 막기 때문에, "화면을 켜둔 채로 운행"하는 경우에만 유효하다.
@@ -1787,7 +1858,7 @@
       '<input type="text" id="modalSsdInput" value="' + escapeHtml(lastSSD) + '" placeholder="예: SSD-01" />' +
       '<label class="modal-field-label">운전자 (선택)</label>' +
       '<input type="text" id="modalDriverInput" value="' + escapeHtml(lastDriver) + '" placeholder="예: 홍길동" />' +
-      '<label class="modal-field-label">첫 목적지 (선택)</label>' +
+      '<label class="modal-field-label">1번 목적지 (선택)</label>' +
       '<input type="text" id="modalFirstDest" placeholder="예: 강남파이낸스센터" />' +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
@@ -2033,7 +2104,10 @@
       text.textContent = '주차 로깅 중';
     } else if (trip){
       dot.className = 'log-status-dot on';
-      text.textContent = trip.mode === 'rest' ? '주행 기록 정지됨' : '주차 탐색 이동 중';
+      text.textContent = trip.mode === 'drive' ? '주차 탐색 이동 중'
+        : trip.mode === 'rest' ? '휴식 중'
+        : trip.mode === 'stopped' ? '주행 기록 정지됨'
+        : '주차 탐색 대기 중';
     } else if (activeRoadId){
       dot.className = 'log-status-dot on';
       text.textContent = '일반도로 로깅 중';
@@ -2049,7 +2123,7 @@
         timerInterval = setInterval(function(){
           updateTimerText();
           var liveTrip = activeTripLog();
-          if (liveTrip) updateTripLegTimer(liveTrip);
+          if (liveTrip){ updateTripLegTimer(liveTrip); updateTripRestTimer(liveTrip); }
           if (activeTab === 'logs') renderLogList();
         }, 1000);
       }
@@ -2288,14 +2362,24 @@
       '<span class="log-event-time">' + formatTimeHMS(e.time) + '</span>' +
     '</div>';
   }
-  // 트립 안에서 "주행 기록 시작/정지"를 여러 번 끊어서 했을 때, 각 구간의 정확한 시작~종료 시각을
-  // 별도 줄로 보여준다(예: "🚙 주행 기록  09:00:00 → 09:05:00"). 구간이 하나뿐이면 위쪽의 전체
-  // 출발~도착 줄과 내용이 겹치므로(끊은 적이 없다는 뜻) 그때는 따로 표시하지 않는다.
+  // 트립 안에서 "주행 기록 시작/정지"를 한 번 또는 여러 번 눌렀을 때, 각 구간의 정확한 시작~종료
+  // 시각을 별도 줄로 보여준다(예: "🚙 주행 기록  09:00:00 → 09:05:00"). 트립을 시작해도 곧바로
+  // 주행 기록이 시작되지 않으므로, 구간이 하나뿐이어도 전체 출발~도착 시간과 다를 수 있어 항상 보여준다.
   function renderSegmentRow(seg){
     var endText = seg.end === null ? '진행 중' : formatTimeHMS(seg.end);
     return '<div class="log-segment-item">' +
       '<span class="log-segment-icon">🚙</span>' +
       '<span class="log-segment-label">주행 기록</span>' +
+      '<span class="log-segment-time">' + formatTimeHMS(seg.start) + ' → ' + endText + '</span>' +
+    '</div>';
+  }
+  // "휴식 시작"을 누른 구간은(끊어서 여러 번 눌러도) 매번 지난 기록에 남겨야 하는 항목이라,
+  // 주행 구간과 달리 구간 개수와 상관없이 항상 보여준다.
+  function renderRestSegmentRow(seg){
+    var endText = seg.end === null ? '진행 중' : formatTimeHMS(seg.end);
+    return '<div class="log-segment-item log-segment-item-rest">' +
+      '<span class="log-segment-icon">☕</span>' +
+      '<span class="log-segment-label">휴식</span>' +
       '<span class="log-segment-time">' + formatTimeHMS(seg.start) + ' → ' + endText + '</span>' +
     '</div>';
   }
@@ -2332,10 +2416,17 @@
       (l.events || []).forEach(function(e){
         g.items.push({ kind: 'event', time: e.time, event: e });
       });
-      // 구간이 2개 이상일 때만(=한 번이라도 끊었을 때만) 개별 구간을 보여준다.
-      if (l.driveSegments && l.driveSegments.length > 1){
+      // 트립은 시작하자마자 자동으로 주행 기록이 시작되지 않으므로("주행 기록 시작"을 직접 눌러야
+      // 함), 구간이 하나뿐이어도 전체 출발~도착 시간과 실제 주행 시작 시간이 다를 수 있어 항상 보여준다.
+      if (l.driveSegments && l.driveSegments.length){
         l.driveSegments.forEach(function(seg){
           g.items.push({ kind: 'segment', time: seg.start, seg: seg });
+        });
+      }
+      // 휴식은 누를 때마다 기록으로 남겨야 하므로 개수와 상관없이 전부 보여준다.
+      if (l.restSegments && l.restSegments.length){
+        l.restSegments.forEach(function(seg){
+          g.items.push({ kind: 'rest-segment', time: seg.start, seg: seg });
         });
       }
     });
@@ -2347,6 +2438,7 @@
       var rowsHtml = g.items.map(function(it){
         if (it.kind === 'event') return renderEventRow(it.event);
         if (it.kind === 'segment') return renderSegmentRow(it.seg);
+        if (it.kind === 'rest-segment') return renderRestSegmentRow(it.seg);
         return renderLogRow(it.log);
       }).join('');
       return '<div class="log-date-header">' + formatDateHeader(g.dateMs) + '</div>' + rowsHtml;
@@ -2791,8 +2883,18 @@
       }
       openTripStartModal();
     });
-    document.getElementById('btnTripRest').addEventListener('click', function(){ setTripMode('rest'); });
-    document.getElementById('btnTripDrive').addEventListener('click', function(){ setTripMode('drive'); });
+    document.getElementById('btnTripDriveToggle').addEventListener('click', function(){
+      var log = activeTripLog();
+      if (!log) return;
+      // 주행 중이면 정지로, 아니면(대기/정지됨/휴식 중) 주행 시작으로 — 버튼 하나가 스스로 토글된다.
+      setTripMode(log.mode === 'drive' ? 'stopped' : 'drive');
+    });
+    document.getElementById('btnTripBreak').addEventListener('click', function(){
+      var log = activeTripLog();
+      if (!log) return;
+      // 휴식 중이면 종료(정지 상태로), 아니면(정지됨) 휴식 시작으로 — 버튼 하나가 스스로 토글된다.
+      setTripMode(log.mode === 'rest' ? 'stopped' : 'rest');
+    });
     document.getElementById('btnTripArrived').addEventListener('click', function(){ promptNextLegAndAdvance('arrived'); });
     document.getElementById('btnTripPass').addEventListener('click', function(){ promptNextLegAndAdvance('passed'); });
     document.getElementById('btnTripReturn').addEventListener('click', function(){ endTripReturned(); });
