@@ -2376,38 +2376,74 @@
     if (/[",\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
     return s;
   }
-  var REPORT_HEADER = ['시나리오','취득일','SSD','위치','고속도로','환경','취득 시작시간','취득 종료시간','취득 시간','목표 대상','비고','SPECIAL','아이','운전자'];
+  var REPORT_HEADER = ['No','시나리오','취득일','SSD','위치','고속도로','환경','취득 시작시간','취득 종료시간','취득 시간','목표 대상','비고','SPECIAL','아이','운전자'];
+  // 이 log(l)의 [rowStart, rowEnd] 구간 하나에 대한 리포트 한 줄을 만든다. SPECIAL/아이는
+  // log.events 전체가 아니라 "이 구간 안에서 눌렀는지"만 본다 — 트립 하나가 주행 시작/정지를
+  // 여러 번 오가며 여러 줄로 쪼개질 때, 각 줄이 실제로 그 시간에 눌렀는지를 정확히 반영하기 위함.
+  function buildReportRow(l, rowStart, rowEnd, isRoad, env, highwayNames, locationOverride){
+    var events = l.events || [];
+    var endForWindow = rowEnd || Date.now();
+    var specialCount = events.filter(function(e){ return e.type === 'special' && e.time >= rowStart && e.time <= endForWindow; }).length;
+    var childCount = events.filter(function(e){ return e.type === 'child' && e.time >= rowStart && e.time <= endForWindow; }).length;
+    // 위치: 주행(road) 로깅은 별도로 위치를 입력받지 않으므로 기본은 비워두지만, 트립의 주행
+    // 구간별로 쪼갠 줄에서는 그 구간이 속한 leg의 목적지를 넣어준다(locationOverride).
+    var location = (locationOverride !== null && locationOverride !== undefined) ? locationOverride : (isRoad ? '' : (l.label || ''));
+    return [
+      LOG_SCENARIO[l.type] || '',
+      formatYYYYMMDD(rowStart),
+      l.ssd || '',
+      location,
+      highwayNames,
+      env,
+      formatHM(rowStart),
+      rowEnd ? formatHM(rowEnd) : '',
+      rowEnd ? formatDurationHM(rowEnd - rowStart) : '',
+      LOG_TARGET[l.type] || '',
+      isRoad ? '' : (LOG_REMARK[l.type] || ''),
+      specialCount > 0 ? 'o' : 'x',
+      childCount > 0 ? 'o' : 'x',
+      l.driver || ''
+    ];
+  }
+  // 특정 시각에 진행 중이었던 leg를 찾는다(리포트에서 주행 구간별 목적지 표시용).
+  function legForTimestamp(log, ts){
+    if (!log.legs || !log.legs.length) return null;
+    for (var i = 0; i < log.legs.length; i++){
+      var leg = log.legs[i];
+      var end = (leg.endTime === null || leg.endTime === undefined) ? Infinity : leg.endTime;
+      if (ts >= leg.startTime && ts <= end) return leg;
+    }
+    return log.legs[log.legs.length - 1];
+  }
   function buildReportRows(dayLogs){
-    var rows = dayLogs.map(function(l){
+    var rows = [];
+    dayLogs.forEach(function(l){
       var isRoad = l.type === 'road';
       var env = isRoad ? (l.highway ? '고속도로' : '일반도로') : '주차장';
-      var events = l.events || [];
-      var specialCount = events.filter(function(e){ return e.type === 'special'; }).length;
-      var childCount = events.filter(function(e){ return e.type === 'child'; }).length;
-      // 위치: 주행(road) 로깅은 별도로 위치를 입력받지 않으므로 비워둠. 주차장/주차 로깅은 입력한 이름 그대로.
-      var location = isRoad ? '' : (l.label || '');
       // 고속도로 구간명: 고속도로 로깅 중 GPS 위치를 바탕으로 자동 인식된 구간명들("OO고속도로 → OO고속도로").
-      // 역지오코딩 결과에 따라 비어 있을 수 있다(최선 노력 기능).
+      // 역지오코딩 결과에 따라 비어 있을 수 있다(최선 노력 기능). 구간별 타임스탬프가 없어 어느 줄에
+      // 넣어도 정확히 매칭은 안 되므로, 트립 전체에서 인식된 이름을 모든 줄에 동일하게 넣어둔다.
       var highwayNames = (isRoad && l.highway && l.highwayRoadNames && l.highwayRoadNames.length)
         ? l.highwayRoadNames.join(' → ') : '';
-      return [
-        LOG_SCENARIO[l.type] || '',
-        formatYYYYMMDD(l.startTime),
-        l.ssd || '',
-        location,
-        highwayNames,
-        env,
-        formatHM(l.startTime),
-        l.endTime ? formatHM(l.endTime) : '',
-        l.endTime ? formatDurationHM(l.endTime - l.startTime) : '',
-        LOG_TARGET[l.type] || '',
-        isRoad ? '' : (LOG_REMARK[l.type] || ''),
-        specialCount > 0 ? 'o' : 'x',
-        childCount > 0 ? 'o' : 'x',
-        l.driver || ''
-      ];
+      var driveSegs = (isRoad && l.driveSegments && l.driveSegments.length) ? l.driveSegments : null;
+      if (!driveSegs){
+        // 트립이 아니거나(또는 트립이어도 주행 시작/정지를 나눈 적이 없으면) 로깅 전체를 한 줄로.
+        rows.push(buildReportRow(l, l.startTime, l.endTime, isRoad, env, highwayNames, null));
+      } else {
+        // 트립 안에서 "주행 기록 시작~정지"를 여러 번 오간 경우 — 그 구간마다 줄을 따로 만들어서
+        // "12:00~12:10", "12:12~12:16"처럼 실제로 로깅한 시간 단위로 SPECIAL/아이를 정확히 반영한다.
+        driveSegs.forEach(function(seg){
+          var segEnd = (seg.end === null || seg.end === undefined) ? l.endTime : seg.end;
+          var leg = legForTimestamp(l, seg.start);
+          var location = '이동 (' + (leg && leg.destination ? leg.destination : '목적지 미입력') + ')';
+          rows.push(buildReportRow(l, seg.start, segEnd, isRoad, env, highwayNames, location));
+        });
+      }
     });
-    return [REPORT_HEADER].concat(rows);
+    // No 컬럼: 리포트 전체에서 1부터 순서대로 매긴 일련번호(엑셀에서 구간이 여러 줄로 늘어나도
+    // 몇 번째 줄인지 바로 알아볼 수 있게).
+    var numbered = rows.map(function(r, i){ return [i + 1].concat(r); });
+    return [REPORT_HEADER].concat(numbered);
   }
   function rowsToCsv(rows){
     // 앞에 BOM을 붙여야 엑셀에서 한글이 깨지지 않음
