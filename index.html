@@ -2399,16 +2399,21 @@
   // 이 log(l)의 [rowStart, rowEnd] 구간 하나에 대한 리포트 한 줄을 만든다. SPECIAL/아이는
   // log.events 전체가 아니라 "이 구간 안에서 눌렀는지"만 본다 — 트립 하나가 주행 시작/정지를
   // 여러 번 오가며 여러 줄로 쪼개질 때, 각 줄이 실제로 그 시간에 눌렀는지를 정확히 반영하기 위함.
-  function buildReportRow(l, rowStart, rowEnd, isRoad, env, highwayNames, locationOverride){
+  // typeOverride: 트립(log.type==='road') 안에서 leg별로 켠 "주차장 기록"/"주차 기록" 구간은
+  // 실제 log의 type은 여전히 'road'이지만, 리포트에서는 각각 'parking_lot'/'parking' 로깅과
+  // 똑같은 시나리오/비고 문구로 보여줘야 하므로 이 값으로 LOG_SCENARIO/LOG_TARGET/LOG_REMARK를
+  // 찾을 type을 따로 지정할 수 있게 한다(생략하면 l.type을 그대로 씀).
+  function buildReportRow(l, rowStart, rowEnd, isRoad, env, highwayNames, locationOverride, typeOverride){
     var events = l.events || [];
     var endForWindow = rowEnd || Date.now();
     var specialCount = events.filter(function(e){ return e.type === 'special' && e.time >= rowStart && e.time <= endForWindow; }).length;
     var childCount = events.filter(function(e){ return e.type === 'child' && e.time >= rowStart && e.time <= endForWindow; }).length;
+    var type = typeOverride || l.type;
     // 위치: 주행(road) 로깅은 별도로 위치를 입력받지 않으므로 기본은 비워두지만, 트립의 주행
     // 구간별로 쪼갠 줄에서는 그 구간이 속한 leg의 목적지를 넣어준다(locationOverride).
     var location = (locationOverride !== null && locationOverride !== undefined) ? locationOverride : (isRoad ? '' : (l.label || ''));
     return [
-      LOG_SCENARIO[l.type] || '',
+      LOG_SCENARIO[type] || '',
       formatYYYYMMDD(rowStart),
       l.ssd || '',
       location,
@@ -2417,8 +2422,8 @@
       formatHM(rowStart),
       rowEnd ? formatHM(rowEnd) : '',
       rowEnd ? formatDurationHM(rowEnd - rowStart) : '',
-      LOG_TARGET[l.type] || '',
-      isRoad ? '' : (LOG_REMARK[l.type] || ''),
+      LOG_TARGET[type] || '',
+      isRoad ? '' : (LOG_REMARK[type] || ''),
       specialCount > 0 ? 'o' : 'x',
       childCount > 0 ? 'o' : 'x',
       l.driver || ''
@@ -2449,6 +2454,10 @@
     dayLogs.forEach(function(l){
       var isRoad = l.type === 'road';
       var driveSegs = (isRoad && l.driveSegments && l.driveSegments.length) ? l.driveSegments : null;
+      // 이 log에서 나올 모든 줄을 { start(정렬용), args(buildReportRow에 넘길 인자들) } 형태로
+      // 일단 모아뒀다가, 마지막에 시각순으로 정렬해서 push한다 — 주행 구간과 트립 안에서 켠
+      // "주차장 기록"/"주차 기록" 구간이 시간순으로 뒤섞여 나오는 경우가 있기 때문.
+      var pending = [];
 
       if (!driveSegs){
         // 트립이 아니거나(또는 트립이어도 주행 시작/정지를 나눈 적이 없으면) 로깅 전체를 한 줄로.
@@ -2456,46 +2465,61 @@
         var wholeEnv = isRoad ? envForRoadNames(l, wholeRoadNames) : '주차장';
         // 주차장/주차 로깅의 "고속도로" 칸엔 도로명 대신 그 건물의 주소지(역지오코딩 결과)를 넣는다.
         var wholeHighwayCol = isRoad ? wholeRoadNames : (l.address || '');
-        rows.push(buildReportRow(l, l.startTime, l.endTime, isRoad, wholeEnv, wholeHighwayCol, null));
-        return;
-      }
+        pending.push({ start: l.startTime, args: [l, l.startTime, l.endTime, isRoad, wholeEnv, wholeHighwayCol, null, undefined] });
+      } else {
+        // 트립 안에서 "주행 기록 시작~정지"를 여러 번 오간 경우 — 같은 목적지로 가는 도중 잠깐씩
+        // 끊었다 이어간 구간들은 한 줄로 묶고(처음 시작~마지막 종료 시각), 목적지가 바뀌었거나
+        // 30분 이상 비어 있으면 새 줄로 나눈다. 1분이 안 되는 짧은 구간은 아예 제외한다.
+        var resolvedSegs = driveSegs.map(function(seg){
+          return { start: seg.start, end: (seg.end === null || seg.end === undefined) ? l.endTime : seg.end };
+        }).filter(function(seg){ return (seg.end - seg.start) >= SEGMENT_MIN_DURATION_MS; });
 
-      // 트립 안에서 "주행 기록 시작~정지"를 여러 번 오간 경우 — 같은 목적지로 가는 도중 잠깐씩
-      // 끊었다 이어간 구간들은 한 줄로 묶고(처음 시작~마지막 종료 시각), 목적지가 바뀌었거나
-      // 30분 이상 비어 있으면 새 줄로 나눈다. 1분이 안 되는 짧은 구간은 아예 제외한다.
-      var resolvedSegs = driveSegs.map(function(seg){
-        return { start: seg.start, end: (seg.end === null || seg.end === undefined) ? l.endTime : seg.end };
-      }).filter(function(seg){ return (seg.end - seg.start) >= SEGMENT_MIN_DURATION_MS; });
-
-      if (!resolvedSegs.length){
-        // 전부 너무 짧은 구간뿐이었다면(드문 예외) 그래도 트립 자체가 리포트에서 통째로 빠지지
-        // 않도록 전체를 한 줄로 남긴다.
-        var fallbackRoadNames = roadNamesForWindow(l, l.startTime, l.endTime);
-        rows.push(buildReportRow(l, l.startTime, l.endTime, isRoad, envForRoadNames(l, fallbackRoadNames), fallbackRoadNames, null));
-        return;
-      }
-
-      var groups = [];
-      resolvedSegs.forEach(function(seg){
-        var leg = legForTimestamp(l, seg.start);
-        var lastGroup = groups.length ? groups[groups.length - 1] : null;
-        if (lastGroup && lastGroup.leg === leg && (seg.start - lastGroup.end) < SEGMENT_MERGE_GAP_MS){
-          lastGroup.end = seg.end; // 이전 구간과 이어붙임(마지막 종료 시각만 갱신)
+        if (!resolvedSegs.length){
+          // 전부 너무 짧은 구간뿐이었다면(드문 예외) 그래도 트립 자체가 리포트에서 통째로 빠지지
+          // 않도록 전체를 한 줄로 남긴다.
+          var fallbackRoadNames = roadNamesForWindow(l, l.startTime, l.endTime);
+          pending.push({ start: l.startTime, args: [l, l.startTime, l.endTime, isRoad, envForRoadNames(l, fallbackRoadNames), fallbackRoadNames, null, undefined] });
         } else {
-          groups.push({ leg: leg, start: seg.start, end: seg.end });
+          var groups = [];
+          resolvedSegs.forEach(function(seg){
+            var leg = legForTimestamp(l, seg.start);
+            var lastGroup = groups.length ? groups[groups.length - 1] : null;
+            if (lastGroup && lastGroup.leg === leg && (seg.start - lastGroup.end) < SEGMENT_MERGE_GAP_MS){
+              lastGroup.end = seg.end; // 이전 구간과 이어붙임(마지막 종료 시각만 갱신)
+            } else {
+              groups.push({ leg: leg, start: seg.start, end: seg.end });
+            }
+          });
+
+          groups.forEach(function(g){
+            var legIndex = g.leg ? l.legs.indexOf(g.leg) : -1;
+            // 첫 목적지로 가는 구간의 출발지는 "사무실"로 기본 표기(트립은 보통 사무실에서 출발하므로),
+            // 그 다음부터는 직전 목적지 → 이번 목적지 순으로 표기한다.
+            var fromLabel = legIndex <= 0 ? '사무실' : (l.legs[legIndex - 1].destination || '이전 목적지');
+            var toLabel = (g.leg && g.leg.destination) ? g.leg.destination : '목적지 미입력';
+            var location = '이동 (' + fromLabel + ' → ' + toLabel + ')';
+            var roadNames = roadNamesForWindow(l, g.start, g.end);
+            pending.push({ start: g.start, args: [l, g.start, g.end, isRoad, envForRoadNames(l, roadNames), roadNames, location, undefined] });
+          });
         }
+      }
+
+      // 트립 안에서 leg별로 켰던 "주차장 기록"/"주차 기록" 구간도 각각 한 줄씩 만든다 — 이게
+      // 없으면 트립 안에서 주차장/주차 로깅한 내용이 리포트에서 통째로 빠지게 된다. 시나리오/비고는
+      // 기존 단독 주차장/주차 로깅과 똑같은 문구(LOG_SCENARIO/LOG_REMARK)를 그대로 쓴다.
+      (l.legs || []).forEach(function(leg){
+        (leg.lotSegments || []).forEach(function(seg){
+          var segEnd = (seg.end === null || seg.end === undefined) ? l.endTime : seg.end;
+          pending.push({ start: seg.start, args: [l, seg.start, segEnd, false, '주차장', '', leg.destination || '', 'parking_lot'] });
+        });
+        (leg.parkSegments || []).forEach(function(seg){
+          var segEnd = (seg.end === null || seg.end === undefined) ? l.endTime : seg.end;
+          pending.push({ start: seg.start, args: [l, seg.start, segEnd, false, '주차장', '', leg.destination || '', 'parking'] });
+        });
       });
 
-      groups.forEach(function(g){
-        var legIndex = g.leg ? l.legs.indexOf(g.leg) : -1;
-        // 첫 목적지로 가는 구간의 출발지는 "사무실"로 기본 표기(트립은 보통 사무실에서 출발하므로),
-        // 그 다음부터는 직전 목적지 → 이번 목적지 순으로 표기한다.
-        var fromLabel = legIndex <= 0 ? '사무실' : (l.legs[legIndex - 1].destination || '이전 목적지');
-        var toLabel = (g.leg && g.leg.destination) ? g.leg.destination : '목적지 미입력';
-        var location = '이동 (' + fromLabel + ' → ' + toLabel + ')';
-        var roadNames = roadNamesForWindow(l, g.start, g.end);
-        rows.push(buildReportRow(l, g.start, g.end, isRoad, envForRoadNames(l, roadNames), roadNames, location));
-      });
+      pending.sort(function(a, b){ return a.start - b.start; });
+      pending.forEach(function(p){ rows.push(buildReportRow.apply(null, p.args)); });
     });
     // No 컬럼: 리포트 전체에서 1부터 순서대로 매긴 일련번호(엑셀에서 구간이 여러 줄로 늘어나도
     // 몇 번째 줄인지 바로 알아볼 수 있게).
