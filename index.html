@@ -3475,6 +3475,51 @@
       pushLogStateToCloud(carrier);
       renderLogList();
     },
+    // "오늘 로깅 종료 · 리포트 보내기"를 누르면 리포트를 만들기 전에 오늘 출발/도착 키로수를
+    // 한 번 물어본다 — 나중에 로깅 기록 탭 날짜 카드에서 ✎로 또 고칠 수 있지만, 로깅을 막
+    // 끝낸 시점에 바로 적는 게 가장 자연스러워서 여기서도 입력받는다. 급하면 건너뛰고 리포트만
+    // 먼저 보낼 수 있게 "입력 없이 보내기"도 남겨둔다.
+    openDayEndKmModal: function(){
+      if (activeRoadId || activeLotId || activeParkingId){
+        showToast('아직 진행 중인 로깅이 있어요. 먼저 종료해주세요.');
+        return;
+      }
+      var todayKey = dateKeyOf(Date.now());
+      var dayLogs = logs.filter(function(l){ return l.endTime && dateKeyOf(l.startTime) === todayKey; });
+      if (!dayLogs.length){
+        showToast('오늘 완료된 로깅 기록이 없어요.');
+        return;
+      }
+      var carrier = dayCarrierLog(dayLogs);
+      openModal(
+        '<h3>오늘 로깅 종료</h3>' +
+        '<label class="modal-field-label">출발 키로수</label>' +
+        '<input type="number" id="dayEndStartKmInput" value="' + escapeHtml(carrier.startKm || '') + '" placeholder="예: 10405" />' +
+        '<label class="modal-field-label">도착 키로수</label>' +
+        '<input type="number" id="dayEndKmInput" value="' + escapeHtml(carrier.endKm || '') + '" placeholder="예: 10587" />' +
+        '<div class="popup-actions">' +
+          '<button class="btn-secondary" onclick="AppMap.confirmDayEndKm(true)">입력 없이 보내기</button>' +
+          '<button class="btn-primary" onclick="AppMap.confirmDayEndKm(false)">저장하고 리포트 보내기</button>' +
+        '</div>'
+      );
+      setTimeout(function(){ var el = document.getElementById('dayEndKmInput'); if (el) el.focus(); }, 30);
+    },
+    confirmDayEndKm: function(skip){
+      var todayKey = dateKeyOf(Date.now());
+      var dayLogs = logs.filter(function(l){ return l.endTime && dateKeyOf(l.startTime) === todayKey; });
+      if (dayLogs.length && !skip){
+        var carrier = dayCarrierLog(dayLogs);
+        var skEl = document.getElementById('dayEndStartKmInput');
+        var ekEl = document.getElementById('dayEndKmInput');
+        if (skEl) carrier.startKm = skEl.value.trim();
+        if (ekEl) carrier.endKm = ekEl.value.trim();
+        saveLogs();
+        pushLogStateToCloud(carrier);
+        renderLogList();
+      }
+      closeModal();
+      shareOrDownloadReport();
+    },
     confirmRename: function(id){
       var input = document.getElementById('renameInput');
       var startInput = document.getElementById('renameStartInput');
@@ -3887,7 +3932,7 @@
       // "회사 복귀" 버튼이 없어진 대신, 진행 중인 트립이 있으면 리포트를 만들기 전에 여기서
       // 자동으로 트립을 종료해준다(예전에 회사 복귀를 눌러야 했던 것과 같은 효과).
       if (activeTripLog()) endTripReturned(true);
-      shareOrDownloadReport();
+      AppMap.openDayEndKmModal();
     });
     document.getElementById('syncStatusBtn').addEventListener('click', function(){
       openTeamCodeModal();
