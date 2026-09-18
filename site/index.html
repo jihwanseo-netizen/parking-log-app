@@ -940,8 +940,10 @@
         catch(e){ return Promise.resolve({ value: null }); }
       },
       set: function(key, value){
-        try { localStorage.setItem(key, value); } catch(e){}
-        return Promise.resolve();
+        // 실패(iOS Safari의 저장 공간 제한/사생활 보호 모드 등)를 삼키지 않고 그대로 알려야
+        // 호출하는 쪽(saveLogs 등)의 catch가 실제로 동작해서 storageReady가 맞게 갱신된다.
+        try { localStorage.setItem(key, value); return Promise.resolve(); }
+        catch(e){ return Promise.reject(e); }
       }
     };
   }
@@ -974,6 +976,8 @@
   var roadPolylines = {};
   var liveMarker = null;
   var lastPathPushAt = 0;
+  var lastFixAt = 0; // 마지막으로 GPS 좌표를 실제로 받은 시각 — watchPosition이 조용히 죽었는지 감시하는 워치독용
+  var geoWatchdogInterval = null;
   var highwaySampleTimestamps = {}; // logId -> 마지막으로 구간명을 확인한 시각(로컬 전용, 클라우드로 동기화 안 됨)
   var followMode = false; // true면 실시간 위치가 갱신될 때마다 지도를 그 위치로 따라감(일반도로 로깅 중에만 동작)
   var showVisited = false; // true일 때만 '갔던 곳'(visited=true) 핀을 지도에 표시. 평소엔 숨겨서 지도가 복잡해지지 않게 함
@@ -1290,6 +1294,18 @@
       showToast('동기화 저장에 실패했어요. 팀 코드를 확인해주세요.');
     });
   }
+  // 장시간 트립의 path(GPS 좌표 배열)는 계속 쌓여서 Firestore 문서 용량 제한(1MB)에 걸릴 수 있다.
+  // "주차 기록 정지"처럼 상태만 바뀌는 중요한 저장은 이 큰 path 필드 때문에 통째로 실패하면 안 되므로,
+  // path를 뺀 나머지 필드만 별도로 올린다(merge:true라서 클라우드의 기존 path는 그대로 유지됨).
+  // path 자체는 startRoadTracking/visibilitychange의 주기적 pushLogToCloud가 계속 갱신해준다.
+  function pushLogStateToCloud(log){
+    if (!cloudReady || !roomRef || !log) return;
+    var payload = toCloudSafeLog(log);
+    delete payload.path;
+    roomRef.doc(log.id).set(payload, { merge: true }).catch(function(){
+      showToast('동기화 저장에 실패했어요. 팀 코드를 확인해주세요.');
+    });
+  }
   function deleteLogFromCloud(id){
     if (!cloudReady || !roomRef) return;
     roomRef.doc(id).delete().catch(function(){});
@@ -1572,7 +1588,7 @@
     if (type === 'parking') activeParkingId = log.id;
     if (type === 'parking_scene') activeSceneId = log.id;
     saveLogs();
-    pushLogToCloud(log);
+    pushLogStateToCloud(log);
     renderLogPanel();
     renderLogList();
     captureStartLocation(log);
@@ -1588,7 +1604,7 @@
       log.startLat = pos.coords.latitude;
       log.startLng = pos.coords.longitude;
       saveLogs();
-      pushLogToCloud(log);
+      pushLogStateToCloud(log);
       reverseGeocodeStart(log);
     }, function(){
       // 위치 권한 거부/실패 — 로깅 자체는 계속 진행하고, 리포트의 주소 칸은 비워둠
@@ -1604,7 +1620,7 @@
         if (data && data.display_name){
           log.address = data.display_name;
           saveLogs();
-          pushLogToCloud(log);
+          pushLogStateToCloud(log);
           if (activeTab === 'logs') renderLogList();
         }
       })
@@ -1642,7 +1658,7 @@
         if (roadNameOf(lastEntry) !== roadName){
           log.highwayRoadNames.push({ name: roadName, time: Date.now() });
           saveLogs();
-          pushLogToCloud(log);
+          pushLogStateToCloud(log);
         }
       })
       .catch(function(){ /* 실패해도 무시 — 리포트의 구간명 칸만 비게 됨 */ });
@@ -1686,14 +1702,14 @@
         var sceneLog = logs.find(function(l){ return l.id === activeSceneId; });
         if (sceneLog){
           sceneLog.endTime = log ? log.endTime : Date.now();
-          pushLogToCloud(sceneLog);
+          pushLogStateToCloud(sceneLog);
         }
         activeSceneId = null;
       }
     }
     if (type === 'parking_scene') activeSceneId = null;
     saveLogs();
-    pushLogToCloud(log);
+    pushLogStateToCloud(log);
     renderLogPanel();
     renderLogList();
   }
@@ -1749,7 +1765,7 @@
     log.legs = [ newLeg(opts.firstDestination || '') ];
     tripPanelLegId = null;
     saveLogs();
-    pushLogToCloud(log);
+    pushLogStateToCloud(log);
     requestWakeLock();
     renderLogPanel();
   }
@@ -1782,7 +1798,7 @@
     }
     log.mode = mode;
     saveLogs();
-    pushLogToCloud(log);
+    pushLogStateToCloud(log);
     renderLogPanel();
     renderLogList();
   }
@@ -1827,7 +1843,7 @@
     leg.arrived = true;
     leg.arrivedTime = Date.now();
     saveLogs();
-    pushLogToCloud(log);
+    pushLogStateToCloud(log);
     renderLogPanel();
     showToast('주차장 도착! 여기서 휴식하거나 주차장/주차 로깅을 할 수 있어요.', 2000);
   }
@@ -1847,7 +1863,7 @@
     if (mode === 'park') leg.parkSegments.push({ start: now, end: null });
     leg.lotMode = mode;
     saveLogs();
-    pushLogToCloud(log);
+    pushLogStateToCloud(log);
     renderLogPanel();
     renderLogList();
   }
@@ -1882,7 +1898,7 @@
     log.legs.push(newLeg(nextDestination || ''));
     tripPanelLegId = null;
     saveLogs();
-    pushLogToCloud(log);
+    pushLogStateToCloud(log);
     renderLogPanel();
     showToast(outcome === 'arrived' ? '주차장 도착을 기록했어요.' : '경유로 기록하고 다음 목적지로 이동해요.', 1500);
   }
@@ -2134,8 +2150,11 @@
       return;
     }
     setGeoStatus('위치 권한을 확인하는 중…');
+    lastFixAt = Date.now();
+    startGeoWatchdog();
     watchId = navigator.geolocation.watchPosition(function(pos){
       setGeoStatus(null);
+      lastFixAt = Date.now();
       var log = logs.find(function(l){ return l.id === activeRoadId; });
       if (!log) return;
       var latlng = [pos.coords.latitude, pos.coords.longitude, Date.now()];
@@ -2175,8 +2194,30 @@
       navigator.geolocation.clearWatch(watchId);
       watchId = null;
     }
+    stopGeoWatchdog();
     if (liveMarker){ liveMarker.setMap(null); liveMarker = null; }
     setGeoStatus(null);
+  }
+  // iOS Safari에서는 화면을 껐다 켜거나 다른 앱에 갔다 오면 watchPosition이 콜백을 다시는
+  // 호출하지 않고 조용히 죽어버리는 경우가 있다(WebKit 버그). 그러면 앱은 멀쩡히 켜져 있어도
+  // 로깅만 멈춘 것처럼 보인다. 일정 시간 새 좌표가 안 들어오면 watch를 강제로 재시작해서
+  // 이 상태에서 자동 복구되게 한다.
+  var GEO_WATCHDOG_CHECK_MS = 10000;
+  var GEO_STALE_MS = 25000; // watchPosition의 timeout(15초)보다 넉넉히 크게 잡아, 정상적인 신호 지연과 구분
+  function startGeoWatchdog(){
+    stopGeoWatchdog();
+    geoWatchdogInterval = setInterval(function(){
+      if (!activeRoadId || watchId === null) return;
+      if (Date.now() - lastFixAt < GEO_STALE_MS) return;
+      // watchPosition이 살아있다면 스스로도 곧 timeout 에러를 낼 시간이지만,
+      // WebKit 버그로 죽은 경우엔 에러조차 안 나므로 여기서 직접 재시작해준다.
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+      startRoadTracking();
+    }, GEO_WATCHDOG_CHECK_MS);
+  }
+  function stopGeoWatchdog(){
+    if (geoWatchdogInterval){ clearInterval(geoWatchdogInterval); geoWatchdogInterval = null; }
   }
   // 화면이 꺼졌다 켜지거나 다른 앱에서 돌아왔을 때, watchPosition이 다시 정상 주기로 돌아올
   // 때까지 기다리지 않고 즉시 현재 위치를 한 번 찍어서 끊긴 구간을 최대한 빨리 이어준다.
@@ -2185,6 +2226,7 @@
     if (document.hidden) return;
     if (!activeRoadId || watchId === null || !navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(function(pos){
+      lastFixAt = Date.now();
       var log = logs.find(function(l){ return l.id === activeRoadId; });
       if (!log) return;
       var latlng = [pos.coords.latitude, pos.coords.longitude, Date.now()];
@@ -2834,7 +2876,7 @@
       log.endTime = Date.now();
       if (wasActiveRoad) stopRoadTracking();
       saveLogs();
-      pushLogToCloud(log);
+      pushLogStateToCloud(log);
       recomputeActiveIds();
       renderLogPanel();
       renderLogList();
@@ -2902,7 +2944,7 @@
       }
       renamingId = null;
       saveLogs();
-      if (log) pushLogToCloud(log);
+      if (log) pushLogStateToCloud(log);
       renderLogList();
     },
     cancelModal: function(){
@@ -2958,7 +3000,7 @@
         leg.events.push({ type: kind, time: Date.now() });
       }
       saveLogs();
-      pushLogToCloud(log);
+      pushLogStateToCloud(log);
       var tagMeta = TRIP_TAGS.find(function(t){ return t.key === kind; });
       var msg = tagMeta ? (tagMeta.label + ' 기록됨') : (kind === 'special' ? '⚠ SPECIAL 기록됨' : kind === 'child' ? '🧒 아이 기록됨' : '기록됨');
       showToast(msg, 1200);
@@ -3245,12 +3287,12 @@
     });
     document.getElementById('tripMemo').addEventListener('blur', function(){
       var log = activeTripLog();
-      if (log) pushLogToCloud(log);
+      if (log) pushLogStateToCloud(log);
     });
     document.getElementById('tripNoSpot').addEventListener('change', function(e){
       var log = activeTripLog();
       var leg = currentLeg(log);
-      if (leg){ leg.noSpot = e.target.checked; saveLogs(); pushLogToCloud(log); }
+      if (leg){ leg.noSpot = e.target.checked; saveLogs(); pushLogStateToCloud(log); }
     });
     var tripTagGrid = document.getElementById('tripTagGrid');
     if (tripTagGrid){
