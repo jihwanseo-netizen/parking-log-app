@@ -543,6 +543,30 @@
     padding: 14px 10px 4px 10px; letter-spacing: 0.02em;
   }
   .log-date-header:first-child{ padding-top: 2px; }
+  .day-summary-card{
+    margin: 10px 10px 8px 10px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--asphalt-2);
+  }
+  .day-summary-card:first-of-type{ margin-top: 2px; }
+  .day-summary-top{ display: flex; align-items: center; gap: 8px; }
+  .day-summary-date{ font-size: 13px; font-weight: 800; color: var(--ink); }
+  .day-summary-edit-btn{
+    margin-left: auto; background: none; border: none; color: var(--ink-dim);
+    font-size: 13px; padding: 2px 4px; cursor: pointer; flex-shrink: 0;
+  }
+  .day-summary-edit-btn:hover{ color: var(--yellow); }
+  .day-summary-range{
+    margin-top: 4px; font-size: 12.5px; font-weight: 700; color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .day-summary-meta{ margin-top: 2px; font-size: 11.5px; color: var(--ink-dim); }
+  .day-summary-actions{ display: flex; gap: 8px; margin-top: 8px; }
+  .day-summary-btn{
+    background: none; border: 1px solid var(--line); color: var(--ink-dim);
+    font-size: 11.5px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .day-summary-btn:hover{ color: var(--yellow); border-color: var(--yellow); }
+  .day-summary-btn-danger:hover{ color: #ff5c5c; border-color: #ff5c5c; }
   .log-event-item{
     display: flex; align-items: center; gap: 8px;
     padding: 5px 10px 5px 34px;
@@ -2702,20 +2726,18 @@
     // 앞에 BOM을 붙여야 엑셀에서 한글이 깨지지 않음
     return '﻿' + rows.map(function(r){ return r.map(csvEscape).join(','); }).join('\r\n');
   }
-  function shareOrDownloadReport(){
-    if (activeRoadId || activeLotId || activeParkingId){
-      showToast('아직 진행 중인 로깅이 있어요. 먼저 종료해주세요.');
-      return;
-    }
-    var todayStr = formatYYYYMMDD(Date.now());
-    var dayLogs = logs.filter(function(l){ return l.endTime && formatYYYYMMDD(l.startTime) === todayStr; })
+  // dateKey는 dateKeyOf()가 주는 'YYYY-MM-DD' 형식. "오늘 로깅 종료" 버튼(오늘 날짜)과
+  // 로깅 기록 탭의 날짜별 카드 "보기" 버튼(과거 아무 날짜나)이 둘 다 이 함수 하나를 같이 쓴다.
+  function shareOrDownloadReportForDate(dateKey){
+    var dayLogs = logs.filter(function(l){ return l.endTime && dateKeyOf(l.startTime) === dateKey; })
       .sort(function(a,b){ return a.startTime - b.startTime; });
     if (dayLogs.length === 0){
-      showToast('오늘 완료된 로깅 기록이 없어요.');
+      showToast('그 날짜에 완료된 로깅 기록이 없어요.');
       return;
     }
+    var fileDateStr = dateKey.replace(/-/g, '');
     var csv = rowsToCsv(buildReportRows(dayLogs));
-    var fileName = '로깅기록_' + todayStr + '.csv';
+    var fileName = '로깅기록_' + fileDateStr + '.csv';
     var file = new File([csv], fileName, { type: 'text/csv' });
     // 윈도우/맥 데스크톱의 Edge·Chrome도 navigator.share를 지원해서 파일 공유 시트가 뜨는데,
     // 데스크톱에선 그 시트에 "내 PC에 저장"/엑셀로 바로 열기 옵션이 없어 오히려 불편하다
@@ -2726,8 +2748,8 @@
     if (isMobile && navigator.canShare && navigator.canShare({ files: [file] })){
       navigator.share({
         files: [file],
-        title: '로깅 리포트 ' + todayStr,
-        text: '오늘 로깅 리포트예요. 메일 앱에서 받는사람에 본인 메일 주소를 입력해 보내주세요.'
+        title: '로깅 리포트 ' + fileDateStr,
+        text: '로깅 리포트예요. 메일 앱에서 받는사람에 본인 메일 주소를 입력해 보내주세요.'
       }).catch(function(){ /* 사용자가 공유 시트를 취소한 경우 — 아무 것도 안 함 */ });
     } else {
       // 데스크톱(그리고 공유 시트를 지원하지 않는 환경)에서는 그냥 파일 다운로드
@@ -2738,6 +2760,13 @@
       setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
       showToast('리포트 파일을 다운로드했어요. 다운로드 폴더에서 열어보세요.');
     }
+  }
+  function shareOrDownloadReport(){
+    if (activeRoadId || activeLotId || activeParkingId){
+      showToast('아직 진행 중인 로깅이 있어요. 먼저 종료해주세요.');
+      return;
+    }
+    shareOrDownloadReportForDate(dateKeyOf(Date.now()));
   }
 
   var renamingId = null;
@@ -2762,6 +2791,53 @@
   function formatTimeHMS(ms){
     var d = new Date(ms);
     return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  function formatTimeHM(ms){
+    var d = new Date(ms);
+    return pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  // 차종/SSD/출발·도착 키로수는 원래 트립(주차 탐색) 시작할 때만 물어보는 값이라, 그 날 트립이
+  // 있으면 그 트립 로그에 붙여서 보여주고 수정도 그 로그에 반영한다. 트립이 없는 날(일반도로/
+  // 주차장/주차만 있는 날)은 그날 첫 로그를 "그릇" 삼아 같은 필드를 얹어서 쓴다 — 다른 로직은
+  // 이 필드들을 안 쓰므로 아무 로그에나 붙여도 안전하다.
+  function dayCarrierLog(dayLogs){
+    var trip = dayLogs.filter(function(l){ return l.legs && l.legs.length; }).sort(function(a,b){ return a.startTime - b.startTime; })[0];
+    return trip || dayLogs[0];
+  }
+  function computeDaySummary(dayLogs){
+    var startTime = Math.min.apply(null, dayLogs.map(function(l){ return l.startTime; }));
+    var isLive = dayLogs.some(function(l){ return !l.endTime; });
+    var endTime = Math.max.apply(null, dayLogs.map(function(l){ return l.endTime || Date.now(); }));
+    var carrier = dayCarrierLog(dayLogs);
+    return {
+      startTime: startTime, endTime: endTime, isLive: isLive,
+      vehicle: carrier.vehicle || '', ssd: carrier.ssd || '',
+      startKm: carrier.startKm || '', endKm: carrier.endKm || ''
+    };
+  }
+  // 로깅 기록 탭 맨 위, 날짜 구분을 겸하는 요약 카드 — 그 날 전체 시간 범위/차종/SSD/키로수를
+  // 보여주고, "보기"로 그 날짜 CSV 리포트를 다시 보내거나 "삭제"로 그 날짜 기록을 통째로 지울 수
+  // 있다(사진 속 리포트 카드처럼).
+  function renderDateHeaderCard(dateKey, dateMs, dayLogs){
+    var s = computeDaySummary(dayLogs);
+    var metaParts = [];
+    if (s.vehicle) metaParts.push(escapeHtml(s.vehicle));
+    if (s.startKm) metaParts.push('출발 ' + escapeHtml(s.startKm) + 'km');
+    if (s.endKm) metaParts.push('도착 ' + escapeHtml(s.endKm) + 'km');
+    if (s.ssd) metaParts.push('SSD ' + escapeHtml(s.ssd));
+    return '<div class="day-summary-card">' +
+      '<div class="day-summary-top">' +
+        '<span class="day-summary-date">📅 ' + formatDateHeader(dateMs) + '</span>' +
+        (s.isLive ? '<span class="log-item-live">LIVE</span>' : '') +
+        '<button type="button" class="day-summary-edit-btn" onclick="AppMap.openEditDaySummaryModal(\'' + dateKey + '\')" title="차종/SSD/키로수 수정">✎</button>' +
+      '</div>' +
+      '<div class="day-summary-range">' + formatTimeHM(s.startTime) + ' ~ ' + formatTimeHM(s.endTime) + ' (' + formatDuration(s.endTime - s.startTime) + ')' + (s.isLive ? ' · 진행 중' : '') + '</div>' +
+      (metaParts.length ? '<div class="day-summary-meta">' + metaParts.join(' · ') + '</div>' : '') +
+      '<div class="day-summary-actions">' +
+        '<button type="button" class="day-summary-btn" onclick="AppMap.sendDateReport(\'' + dateKey + '\')">보기</button>' +
+        '<button type="button" class="day-summary-btn day-summary-btn-danger" onclick="AppMap.openDeleteDateConfirm(\'' + dateKey + '\')">삭제</button>' +
+      '</div>' +
+    '</div>';
   }
   function renderLogRow(l){
     var meta = LOG_META[l.type];
@@ -2974,7 +3050,8 @@
     sorted.forEach(function(l){
       var key = dateKeyOf(l.startTime);
       var g = groupByKey[key];
-      if (!g){ g = { dateMs: l.startTime, items: [] }; groupByKey[key] = g; groups.push(g); }
+      if (!g){ g = { key: key, dateMs: l.startTime, items: [], logs: [] }; groupByKey[key] = g; groups.push(g); }
+      g.logs.push(l);
       var isTrip = l.legs && l.legs.length;
       if (isTrip){
         // 트립은 목적지(leg)별로 묶어서 카드 하나로 보여준다(renderTripCard) — 그 안에서
@@ -2998,7 +3075,7 @@
         if (it.kind === 'trip') return renderTripCard(it.log);
         return renderLogRow(it.log);
       }).join('');
-      return '<div class="log-date-header">' + formatDateHeader(g.dateMs) + '</div>' + rowsHtml;
+      return renderDateHeaderCard(g.key, g.dateMs, g.logs) + rowsHtml;
     }).join('');
 
     if (renamingId){
@@ -3314,6 +3391,88 @@
     },
     toggleShowAllLogs: function(){
       showAllLogs = !showAllLogs;
+      renderLogList();
+    },
+    // 로깅 기록 탭 날짜별 요약 카드의 "보기" — 그 날짜 리포트를 다시 만들어서 보내기/다운로드.
+    sendDateReport: function(dateKey){
+      if (activeRoadId || activeLotId || activeParkingId){
+        showToast('아직 진행 중인 로깅이 있어요. 먼저 종료해주세요.');
+        return;
+      }
+      shareOrDownloadReportForDate(dateKey);
+    },
+    // 날짜 요약 카드의 "삭제" — 되돌릴 수 없으므로 확인 모달을 한 번 거친다.
+    openDeleteDateConfirm: function(dateKey){
+      var dayLogs = logs.filter(function(l){ return dateKeyOf(l.startTime) === dateKey; });
+      if (!dayLogs.length) return;
+      openModal(
+        '<h3>이 날짜 기록 삭제</h3>' +
+        '<p class="modal-field-label">' + escapeHtml(formatDateHeader(dayLogs[0].startTime)) + '의 로깅 기록 ' + dayLogs.length + '건을 전부 삭제해요. 되돌릴 수 없어요.</p>' +
+        '<div class="popup-actions">' +
+          '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
+          '<button class="btn-danger" onclick="AppMap.deleteDateLogs(\'' + dateKey + '\')">삭제</button>' +
+        '</div>'
+      );
+    },
+    deleteDateLogs: function(dateKey){
+      var dayLogs = logs.filter(function(l){ return dateKeyOf(l.startTime) === dateKey; });
+      if (!dayLogs.length) { closeModal(); return; }
+      // 지금 진행 중인 로깅이 이 날짜 안에 있으면(오늘 로깅 중인데 오늘 카드를 지우려는 경우 등)
+      // 라이브 상태가 꼬이지 않도록 막는다.
+      var hasActive = dayLogs.some(function(l){ return !l.endTime; });
+      if (hasActive){
+        closeModal();
+        showToast('아직 진행 중인 로깅이 있어요. 먼저 종료한 뒤 삭제해주세요.');
+        return;
+      }
+      var idsToDelete = dayLogs.map(function(l){ return l.id; });
+      idsToDelete.forEach(function(id){ clearRoadPolylines(id); });
+      logs = logs.filter(function(l){ return dateKeyOf(l.startTime) !== dateKey; });
+      saveLogs();
+      idsToDelete.forEach(function(id){ deleteLogFromCloud(id); });
+      recomputeActiveIds();
+      closeModal();
+      renderLogPanel();
+      renderLogList();
+      showToast('그 날짜 기록을 모두 삭제했어요.', 1500);
+    },
+    // 날짜 요약 카드의 ✎ — 차종/SSD/출발·도착 키로수 수정(트립이 있으면 그 트립에, 없으면 그 날
+    // 첫 로그에 저장).
+    openEditDaySummaryModal: function(dateKey){
+      var dayLogs = logs.filter(function(l){ return dateKeyOf(l.startTime) === dateKey; });
+      if (!dayLogs.length) return;
+      var carrier = dayCarrierLog(dayLogs);
+      openModal(
+        '<h3>' + escapeHtml(formatDateHeader(dayLogs[0].startTime)) + ' 정보 수정</h3>' +
+        '<label class="modal-field-label">차종</label>' +
+        '<input type="text" id="dayVehicleInput" value="' + escapeHtml(carrier.vehicle || '') + '" placeholder="예: GN7" />' +
+        '<label class="modal-field-label">SSD 번호</label>' +
+        '<input type="text" id="daySsdInput" value="' + escapeHtml(carrier.ssd || '') + '" placeholder="예: SSD-01" />' +
+        '<label class="modal-field-label">출발 키로수</label>' +
+        '<input type="number" id="dayStartKmInput" value="' + escapeHtml(carrier.startKm || '') + '" placeholder="예: 10405" />' +
+        '<label class="modal-field-label">도착 키로수</label>' +
+        '<input type="number" id="dayEndKmInput" value="' + escapeHtml(carrier.endKm || '') + '" placeholder="예: 10587" />' +
+        '<div class="popup-actions">' +
+          '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
+          '<button class="btn-primary" onclick="AppMap.confirmEditDaySummary(\'' + dateKey + '\')">저장</button>' +
+        '</div>'
+      );
+    },
+    confirmEditDaySummary: function(dateKey){
+      var dayLogs = logs.filter(function(l){ return dateKeyOf(l.startTime) === dateKey; });
+      if (!dayLogs.length){ closeModal(); return; }
+      var carrier = dayCarrierLog(dayLogs);
+      var vEl = document.getElementById('dayVehicleInput');
+      var sEl = document.getElementById('daySsdInput');
+      var skEl = document.getElementById('dayStartKmInput');
+      var ekEl = document.getElementById('dayEndKmInput');
+      if (vEl) carrier.vehicle = vEl.value.trim();
+      if (sEl) carrier.ssd = sEl.value.trim();
+      if (skEl) carrier.startKm = skEl.value.trim();
+      if (ekEl) carrier.endKm = ekEl.value.trim();
+      closeModal();
+      saveLogs();
+      pushLogStateToCloud(carrier);
       renderLogList();
     },
     confirmRename: function(id){
