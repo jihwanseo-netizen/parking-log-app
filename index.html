@@ -564,6 +564,69 @@
   .log-segment-item-lot{ color: #0E9F6E; }
   .log-segment-item-park{ color: #7C5CFC; }
 
+  /* ---------- 트립(주차 탐색) 로깅 기록 카드 — 목적지별로 묶어서 검토/수정 ---------- */
+  .legcard-trip{
+    margin: 4px 10px 12px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--asphalt-2);
+    overflow: hidden;
+  }
+  .legcard-trip-header{
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    font-size: 12.5px; color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .legcard-trip-range{ color: var(--ink); font-weight: 700; }
+  .legcard-trip-vehicle{
+    margin-left: auto; font-size: 10px; font-weight: 700; color: var(--ink-dim);
+    border: 1px solid var(--line); padding: 1px 6px; border-radius: 999px;
+  }
+  .legcard{ border-bottom: 1px solid var(--line); }
+  .legcard:last-child{ border-bottom: none; }
+  .legcard-header{
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; cursor: pointer;
+  }
+  .legcard-toggle{ color: var(--ink-dim); flex-shrink: 0; width: 12px; }
+  .legcard-dest{ font-weight: 700; font-size: 13.5px; }
+  .legcard-count{ font-size: 11.5px; color: var(--ink-dim); margin-left: 6px; }
+  .legcard-edit-dest-btn{
+    margin-left: auto; background: none; border: 1px solid var(--line); color: var(--ink-dim);
+    font-size: 11px; padding: 3px 8px; border-radius: 999px; cursor: pointer; flex-shrink: 0;
+  }
+  .legcard-edit-dest-btn:hover{ color: var(--yellow); border-color: var(--yellow); }
+  .legcard-summary{
+    display: flex; gap: 14px; flex-wrap: wrap;
+    padding: 0 12px 10px 34px;
+    font-size: 11.5px; color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .legcard-record-row{
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px 6px 34px;
+    font-size: 12.5px; color: var(--ink-dim);
+    background: rgba(255,255,255,0.02);
+  }
+  .legcard-record-icon{ flex-shrink: 0; }
+  .legcard-record-label{ flex: 1; }
+  .legcard-record-time{ font-variant-numeric: tabular-nums; }
+  .legcard-record-edit{
+    background:none; border:none; color: var(--ink-dim); cursor:pointer;
+    font-size: 11.5px; padding: 2px 6px; flex-shrink: 0; text-decoration: underline;
+  }
+  .legcard-record-edit:hover{ color: var(--yellow); }
+  .legcard-add-row{
+    display: flex; gap: 8px; padding: 8px 12px 12px 34px;
+  }
+  .legcard-add-btn{
+    background: none; border: 1px dashed var(--line); color: var(--ink-dim);
+    font-size: 11.5px; padding: 5px 10px; border-radius: 7px; cursor: pointer;
+  }
+  .legcard-add-btn:hover{ color: var(--yellow); border-color: var(--yellow); }
+
   .geo-status{
     font-size: 11px; color: var(--ink-dim); margin-top: 8px;
   }
@@ -2113,6 +2176,7 @@
   function clearRoadPolylines(logId){
     (roadPolylines[logId] || []).forEach(function(pl){ pl.setMap(null); });
     delete roadPolylines[logId];
+    delete roadSegmentStartIdx[logId];
   }
   function renderRoadPath(logId, path, color){
     if (!map) return;
@@ -2128,6 +2192,58 @@
         strokeStyle: 'solid'
       });
     });
+    // GPS가 계속 들어오는 동안엔 renderRoadPath(전체 재계산)를 매번 부르지 않고 appendRoadPoint로
+    // 마지막 구간만 이어그리는데, 그러려면 "마지막 구간이 path의 몇 번째 인덱스부터 시작하는지"를
+    // 알아야 한다. 여기(전체 재계산 시점)에서 한 번 기록해두면 이후 appendRoadPoint가 이어받는다.
+    if (segments.length){
+      roadSegmentStartIdx[logId] = path.length - segments[segments.length - 1].length;
+    }
+  }
+  // 주행 중 GPS 좌표가 들어올 때마다(약 2초 간격) 이걸 부르는데, renderRoadPath처럼 매번 전체
+  // path를 처음부터 다시 훑어서 폴리라인을 통째로 지웠다 새로 만들면, 트립이 길어질수록(누적
+  // 좌표가 몇 시간치로 늘어날수록) 매 갱신 비용이 점점 커지고(O(전체 길이)), 카카오맵 오버레이
+  // 객체를 몇 초마다 계속 파괴/재생성하게 돼서 메인 스레드 부하와 메모리 압박이 함께 커진다.
+  // (지하주차장 등에서 오래 켜두면 아이폰 사파리가 이 탭을 메모리 부족으로 새로고침시키는 것도
+  // 이런 누적 부하가 한 원인일 수 있다.) 그래서 매 GPS 갱신마다는 "새로 늘어난 점"만 갖고 마지막
+  // 구간의 좌표만 갱신(setPath)하거나(이미 있는 폴리라인 객체 재사용), 신호가 끊겼다 다시 잡혀서
+  // 새 구간이 시작될 때만 폴리라인을 하나 더 추가한다. 이전 구간들은 다시 손대지 않는다.
+  var roadSegmentStartIdx = {};
+  function appendRoadPoint(logId, path, color){
+    if (!map) return;
+    var n = path.length;
+    if (n < 1) return;
+    var startIdx = roadSegmentStartIdx[logId];
+    var gapped = false;
+    if (startIdx === undefined){
+      startIdx = 0;
+    } else if (n >= 2){
+      var prevT = pointTime(path[n - 2]);
+      var curT = pointTime(path[n - 1]);
+      if (prevT && curT && (curT - prevT) > ROAD_GAP_MS){
+        gapped = true;
+        startIdx = n - 1; // 새로 끊어지는 구간은 방금 들어온 이 점부터 시작
+      }
+    }
+    roadSegmentStartIdx[logId] = startIdx;
+    var segPoints = path.slice(startIdx);
+    if (segPoints.length < 2) return; // 이 구간에 점이 아직 하나뿐이면 그릴 선이 없음
+
+    var existing = roadPolylines[logId];
+    var lastPolyline = existing && existing.length ? existing[existing.length - 1] : null;
+    if (gapped || !lastPolyline){
+      var newPl = new kakao.maps.Polyline({
+        map: map,
+        path: toKakaoPath(segPoints),
+        strokeWeight: 4,
+        strokeColor: color || '#2F6FED',
+        strokeOpacity: 0.75,
+        strokeStyle: 'solid'
+      });
+      if (!roadPolylines[logId]) roadPolylines[logId] = [];
+      roadPolylines[logId].push(newPl);
+    } else {
+      lastPolyline.setPath(toKakaoPath(segPoints));
+    }
   }
   function drawSavedPaths(){
     if (!map) return;
@@ -2159,7 +2275,7 @@
       if (!log) return;
       var latlng = [pos.coords.latitude, pos.coords.longitude, Date.now()];
       log.path.push(latlng);
-      renderRoadPath(log.id, log.path);
+      appendRoadPoint(log.id, log.path);
       maybeSampleHighwayRoad(log);
       var kakaoLatLng = toKakaoLatLng(latlng);
       if (!liveMarker){
@@ -2231,7 +2347,7 @@
       if (!log) return;
       var latlng = [pos.coords.latitude, pos.coords.longitude, Date.now()];
       log.path.push(latlng);
-      renderRoadPath(log.id, log.path);
+      appendRoadPoint(log.id, log.path);
       maybeSampleHighwayRoad(log);
       if (liveMarker){
         var kakaoLatLng = toKakaoLatLng(latlng);
@@ -2695,46 +2811,132 @@
       '<span class="log-event-time">' + formatTimeHMS(e.time) + '</span>' +
     '</div>';
   }
-  // 트립 안에서 "주행 기록 시작/정지"를 한 번 또는 여러 번 눌렀을 때, 각 구간의 정확한 시작~종료
-  // 시각을 별도 줄로 보여준다(예: "🚙 주행 기록  09:00:00 → 09:05:00"). 트립을 시작해도 곧바로
-  // 주행 기록이 시작되지 않으므로, 구간이 하나뿐이어도 전체 출발~도착 시간과 다를 수 있어 항상 보여준다.
-  function renderSegmentRow(seg){
-    var endText = seg.end === null ? '진행 중' : formatTimeHMS(seg.end);
-    return '<div class="log-segment-item">' +
-      '<span class="log-segment-icon">🚙</span>' +
-      '<span class="log-segment-label">주행 기록</span>' +
-      '<span class="log-segment-time">' + formatTimeHMS(seg.start) + ' → ' + endText + '</span>' +
-    '</div>';
-  }
-  // "휴식 시작"을 누른 구간은(끊어서 여러 번 눌러도) 매번 지난 기록에 남겨야 하는 항목이라,
-  // 주행 구간과 달리 구간 개수와 상관없이 항상 보여준다.
-  function renderRestSegmentRow(seg){
-    var endText = seg.end === null ? '진행 중' : formatTimeHMS(seg.end);
-    return '<div class="log-segment-item log-segment-item-rest">' +
-      '<span class="log-segment-icon">☕</span>' +
-      '<span class="log-segment-label">휴식</span>' +
-      '<span class="log-segment-time">' + formatTimeHMS(seg.start) + ' → ' + endText + '</span>' +
-    '</div>';
-  }
+  // (예전엔 주행/휴식 구간을 지난기록 타임라인에 한 줄씩 흩뿌려서 보여줬는데, 트립은 이제
+  // renderTripCard/renderLegRecordRow가 목적지별로 묶어서 보여주므로 이 단독 렌더 함수들은
+  // 더 이상 쓰이지 않는다 — 아래에서 제거함.)
   // 주차장 도착 후 "주차장 기록 시작"/"주차 기록 시작"을 누른 구간도, 작업 중에 실제로 몇 시부터
   // 몇 시까지 켜져 있었는지 바로바로 확인할 수 있어야 하므로 주행 기록/휴식과 동일하게 지난 기록
   // 타임라인에 항상 보여준다(리포트에는 이미 반영돼 있었지만 화면 목록에는 빠져 있었음).
-  function renderLotSegmentRow(seg, leg){
-    var endText = (seg.end === null || seg.end === undefined) ? '진행 중' : formatTimeHMS(seg.end);
-    var destText = (leg && leg.destination) ? ' · ' + escapeHtml(leg.destination) : '';
-    return '<div class="log-segment-item log-segment-item-lot">' +
-      '<span class="log-segment-icon">🅿️</span>' +
-      '<span class="log-segment-label">주차장 기록' + destText + '</span>' +
-      '<span class="log-segment-time">' + formatTimeHMS(seg.start) + ' → ' + endText + '</span>' +
+  // ---------- 트립(주차 탐색) 로깅 기록: 목적지(leg)별로 묶어서 보여주고 사후에 고칠 수 있게 ----------
+  // 예전엔 주행/휴식/주차장/주차 구간이 지난기록 타임라인에 각자 흩어진 한 줄짜리 항목으로 섞여
+  // 나왔는데, 목적지가 여러 개인 트립에서는 어떤 구간이 몇 번째 목적지 것인지 한눈에 보기 어렵고
+  // 목적지 이름을 잘못 입력했거나 시각이 잘못 찍힌 경우 고칠 방법도 없었다. 이제 트립은 목적지별
+  // 카드로 묶어서, 카드를 펼치면 그 목적지에서 있었던 기록만 시간순으로 보여주고 각 줄에서
+  // 수정/삭제, 카드 제목에서 목적지 이름 수정, 그리고 빠뜨린 기록을 수동으로 추가할 수 있다.
+  var expandedLegIds = {};      // legId -> 펼침 여부(메모리에만 유지, 새로고침하면 초기화돼도 무방)
+  var addRecordTypeChoice = 'drive';
+  var addEventTypeChoice = 'special';
+  // kind별로 실제 데이터가 들어있는 배열을 찾아준다 — drive/rest는 트립(log) 전체 기준, lot/park는
+  // leg 기준으로 따로 저장돼 있어서 수정/삭제 시 이 함수로 한 곳에서 참조를 해결한다.
+  function resolveRecordArray(log, kind, legId){
+    if (kind === 'drive') return log.driveSegments || (log.driveSegments = []);
+    if (kind === 'rest') return log.restSegments || (log.restSegments = []);
+    if (kind === 'event') return log.events || (log.events = []);
+    var leg = (log.legs || []).find(function(lg){ return lg.id === legId; });
+    if (!leg) return null;
+    if (kind === 'lot') return leg.lotSegments || (leg.lotSegments = []);
+    if (kind === 'park') return leg.parkSegments || (leg.parkSegments = []);
+    return null;
+  }
+  // 이 leg(목적지) 시간대에 걸리는 주행/휴식/주차장/주차 구간과 SPECIAL/아이 이벤트를 전부 모아
+  // 시간순으로 정렬한다. refIndex는 실제 저장 배열(위 resolveRecordArray가 찾는 배열) 안에서의
+  // 위치라서, 나중에 수정/삭제할 때 이 값으로 정확히 그 항목을 다시 찾을 수 있다.
+  function collectLegRecords(log, leg){
+    var items = [];
+    (log.driveSegments || []).forEach(function(seg, i){
+      if (legForTimestamp(log, seg.start) === leg) items.push({ kind: 'drive', refIndex: i, data: seg, time: seg.start });
+    });
+    (log.restSegments || []).forEach(function(seg, i){
+      if (legForTimestamp(log, seg.start) === leg) items.push({ kind: 'rest', refIndex: i, data: seg, time: seg.start });
+    });
+    (leg.lotSegments || []).forEach(function(seg, i){
+      items.push({ kind: 'lot', refIndex: i, data: seg, time: seg.start });
+    });
+    (leg.parkSegments || []).forEach(function(seg, i){
+      items.push({ kind: 'park', refIndex: i, data: seg, time: seg.start });
+    });
+    (log.events || []).forEach(function(e, i){
+      if (legForTimestamp(log, e.time) === leg) items.push({ kind: 'event', refIndex: i, data: e, time: e.time });
+    });
+    items.sort(function(a, b){ return a.time - b.time; });
+    return items;
+  }
+  var LEG_RECORD_META = {
+    drive: { icon: '🚗', label: '주행 기록' },
+    rest:  { icon: '☕', label: '휴식' },
+    lot:   { icon: '🅿️', label: '주차장 기록' },
+    park:  { icon: '🚙', label: '주차 기록' }
+  };
+  function renderLegRecordRow(logId, legId, r){
+    var icon, label, timeText;
+    if (r.kind === 'event'){
+      var meta = EVENT_META[r.data.type] || { icon: '•', label: r.data.type };
+      icon = meta.icon; label = meta.label;
+      timeText = formatTimeHMS(r.data.time);
+    } else {
+      var m = LEG_RECORD_META[r.kind];
+      icon = m.icon; label = m.label;
+      var endMs = (r.data.end === null || r.data.end === undefined) ? null : r.data.end;
+      var endText = endMs === null ? '진행 중' : formatTimeHMS(endMs);
+      var durMs = (endMs === null ? Date.now() : endMs) - r.data.start;
+      timeText = formatTimeHMS(r.data.start) + ' → ' + endText + ' (' + formatDuration(durMs) + ')';
+    }
+    return '<div class="legcard-record-row">' +
+      '<span class="legcard-record-icon">' + icon + '</span>' +
+      '<span class="legcard-record-label">' + label + '</span>' +
+      '<span class="legcard-record-time">' + timeText + '</span>' +
+      '<button type="button" class="legcard-record-edit" onclick="AppMap.openEditRecordModal(\'' + logId + '\',\'' + r.kind + '\',' + r.refIndex + ',\'' + legId + '\')">수정</button>' +
     '</div>';
   }
-  function renderParkSegmentRow(seg, leg){
-    var endText = (seg.end === null || seg.end === undefined) ? '진행 중' : formatTimeHMS(seg.end);
-    var destText = (leg && leg.destination) ? ' · ' + escapeHtml(leg.destination) : '';
-    return '<div class="log-segment-item log-segment-item-park">' +
-      '<span class="log-segment-icon">🚙</span>' +
-      '<span class="log-segment-label">주차 기록' + destText + '</span>' +
-      '<span class="log-segment-time">' + formatTimeHMS(seg.start) + ' → ' + endText + '</span>' +
+  function renderLegCard(log, leg, idx){
+    var expanded = !!expandedLegIds[leg.id];
+    var records = collectLegRecords(log, leg);
+    var specialTotal = records.filter(function(r){ return r.kind === 'event'; }).length;
+    var moveMs = records.filter(function(r){ return r.kind === 'drive'; }).reduce(function(sum, r){
+      var end = (r.data.end === null || r.data.end === undefined) ? Date.now() : r.data.end;
+      return sum + Math.max(0, end - r.data.start);
+    }, 0);
+    var arrivedText = leg.arrivedTime ? formatTimeHMS(leg.arrivedTime) : '-';
+    var departText = (leg.endTime === null || leg.endTime === undefined) ? '-' : formatTimeHMS(leg.endTime);
+    var recordsHtml = expanded
+      ? (
+          (records.length
+            ? records.map(function(r){ return renderLegRecordRow(log.id, leg.id, r); }).join('')
+            : '<div class="legcard-record-row">기록이 아직 없어요.</div>') +
+          '<div class="legcard-add-row">' +
+            '<button type="button" class="legcard-add-btn" onclick="AppMap.openAddRecordModal(\'' + log.id + '\',\'' + leg.id + '\')">+ 기록 추가</button>' +
+            '<button type="button" class="legcard-add-btn" onclick="AppMap.openAddEventModal(\'' + log.id + '\',\'' + leg.id + '\')">+ 특이사항 추가</button>' +
+          '</div>'
+        )
+      : '';
+    return '<div class="legcard">' +
+      '<div class="legcard-header" onclick="AppMap.toggleLegExpanded(\'' + leg.id + '\')">' +
+        '<span class="legcard-toggle">' + (expanded ? '▾' : '▸') + '</span>' +
+        '<span class="legcard-dest">' + (idx + 1) + '번 · ' + escapeHtml(leg.destination || '목적지 미입력') + '</span>' +
+        '<span class="legcard-count">기록 ' + records.length + '건' + (specialTotal ? ' · 특이 ' + specialTotal + '건' : '') + '</span>' +
+        '<button type="button" class="legcard-edit-dest-btn" onclick="event.stopPropagation(); AppMap.openEditLegDestModal(\'' + log.id + '\',\'' + leg.id + '\')">목적지 수정</button>' +
+      '</div>' +
+      '<div class="legcard-summary">' +
+        '<span>도착 ' + arrivedText + '</span>' +
+        '<span>출차 ' + departText + '</span>' +
+        '<span>이동 ' + formatDuration(moveMs) + '</span>' +
+      '</div>' +
+      recordsHtml +
+    '</div>';
+  }
+  function renderTripCard(log){
+    var isLive = !log.endTime;
+    var endText = isLive ? '진행 중' : formatTimeHMS(log.endTime);
+    var totalDur = (isLive ? Date.now() : log.endTime) - log.startTime;
+    var legsHtml = (log.legs || []).map(function(leg, idx){ return renderLegCard(log, leg, idx); }).join('');
+    return '<div class="legcard-trip">' +
+      '<div class="legcard-trip-header">' +
+        '<span class="legcard-trip-range">' + formatTimeHMS(log.startTime) + ' → ' + endText + '</span>' +
+        '<span>(' + formatDuration(totalDur) + ')</span>' +
+        (isLive ? '<span class="log-item-live">LIVE</span>' : '') +
+        (log.vehicle ? '<span class="legcard-trip-vehicle">' + escapeHtml(log.vehicle) + '</span>' : '') +
+      '</div>' +
+      legsHtml +
     '</div>';
   }
   function renderLogList(){
@@ -2766,33 +2968,18 @@
       var key = dateKeyOf(l.startTime);
       var g = groupByKey[key];
       if (!g){ g = { dateMs: l.startTime, items: [] }; groupByKey[key] = g; groups.push(g); }
-      g.items.push({ kind: 'log', time: l.startTime, log: l });
-      (l.events || []).forEach(function(e){
-        g.items.push({ kind: 'event', time: e.time, event: e });
-      });
-      // 트립은 시작하자마자 자동으로 주행 기록이 시작되지 않으므로("주행 기록 시작"을 직접 눌러야
-      // 함), 구간이 하나뿐이어도 전체 출발~도착 시간과 실제 주행 시작 시간이 다를 수 있어 항상 보여준다.
-      if (l.driveSegments && l.driveSegments.length){
-        l.driveSegments.forEach(function(seg){
-          g.items.push({ kind: 'segment', time: seg.start, seg: seg });
+      var isTrip = l.legs && l.legs.length;
+      if (isTrip){
+        // 트립은 목적지(leg)별로 묶어서 카드 하나로 보여준다(renderTripCard) — 그 안에서
+        // 주행/휴식/주차장/주차 구간과 SPECIAL/아이 이벤트를 목적지별로 다시 모아 보여주고
+        // 수정/삭제/추가도 그 카드 안에서 처리하므로, 여기서 따로 흩뿌리지 않는다.
+        g.items.push({ kind: 'trip', time: l.startTime, log: l });
+      } else {
+        g.items.push({ kind: 'log', time: l.startTime, log: l });
+        (l.events || []).forEach(function(e){
+          g.items.push({ kind: 'event', time: e.time, event: e });
         });
       }
-      // 휴식은 누를 때마다 기록으로 남겨야 하므로 개수와 상관없이 전부 보여준다.
-      if (l.restSegments && l.restSegments.length){
-        l.restSegments.forEach(function(seg){
-          g.items.push({ kind: 'rest-segment', time: seg.start, seg: seg });
-        });
-      }
-      // 목적지(leg)별 "주차장 기록"/"주차 기록" 구간도 리포트뿐 아니라 화면 타임라인에 바로 보여야
-      // 작업 중에 확인할 수 있다.
-      (l.legs || []).forEach(function(leg){
-        (leg.lotSegments || []).forEach(function(seg){
-          g.items.push({ kind: 'lot-segment', time: seg.start, seg: seg, leg: leg });
-        });
-        (leg.parkSegments || []).forEach(function(seg){
-          g.items.push({ kind: 'park-segment', time: seg.start, seg: seg, leg: leg });
-        });
-      });
     });
     groups.forEach(function(g){
       g.items.sort(function(a, b){ return b.time - a.time; });
@@ -2801,10 +2988,7 @@
     list.innerHTML = toggleHtml + groups.map(function(g){
       var rowsHtml = g.items.map(function(it){
         if (it.kind === 'event') return renderEventRow(it.event);
-        if (it.kind === 'segment') return renderSegmentRow(it.seg);
-        if (it.kind === 'rest-segment') return renderRestSegmentRow(it.seg);
-        if (it.kind === 'lot-segment') return renderLotSegmentRow(it.seg, it.leg);
-        if (it.kind === 'park-segment') return renderParkSegmentRow(it.seg, it.leg);
+        if (it.kind === 'trip') return renderTripCard(it.log);
         return renderLogRow(it.log);
       }).join('');
       return '<div class="log-date-header">' + formatDateHeader(g.dateMs) + '</div>' + rowsHtml;
@@ -2915,6 +3099,193 @@
     },
     startRename: function(id){
       renamingId = id;
+      renderLogList();
+    },
+    // ---- 트립 로깅 기록 카드: 목적지 펼치기/접기, 목적지 이름 수정, 개별 기록 수정/삭제/추가 ----
+    toggleLegExpanded: function(legId){
+      expandedLegIds[legId] = !expandedLegIds[legId];
+      renderLogList();
+    },
+    openEditLegDestModal: function(logId, legId){
+      var log = logs.find(function(l){ return l.id === logId; });
+      var leg = log && (log.legs || []).find(function(lg){ return lg.id === legId; });
+      if (!leg) return;
+      openModal(
+        '<h3>목적지 이름 수정</h3>' +
+        '<label class="modal-field-label">목적지</label>' +
+        '<input type="text" id="legDestInput" value="' + escapeHtml(leg.destination || '') + '" placeholder="예: 강남파이낸스센터" />' +
+        '<div class="popup-actions">' +
+          '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
+          '<button class="btn-primary" onclick="AppMap.confirmEditLegDest(\'' + logId + '\',\'' + legId + '\')">저장</button>' +
+        '</div>'
+      );
+      setTimeout(function(){ var el = document.getElementById('legDestInput'); if (el){ el.focus(); el.select(); } }, 30);
+    },
+    confirmEditLegDest: function(logId, legId){
+      var log = logs.find(function(l){ return l.id === logId; });
+      var leg = log && (log.legs || []).find(function(lg){ return lg.id === legId; });
+      if (!leg) return;
+      var input = document.getElementById('legDestInput');
+      var val = input ? input.value.trim() : '';
+      if (val) leg.destination = val;
+      closeModal();
+      saveLogs();
+      pushLogStateToCloud(log);
+      renderLogPanel();
+      renderLogList();
+    },
+    openAddRecordModal: function(logId, legId){
+      addRecordTypeChoice = 'drive';
+      openModal(
+        '<h3>기록 추가</h3>' +
+        '<label class="modal-field-label">종류</label>' +
+        '<div class="env-toggle" id="addRecordTypeToggle">' +
+          '<button type="button" class="env-toggle-btn active" data-rt="drive">🚗 주행</button>' +
+          '<button type="button" class="env-toggle-btn" data-rt="rest">☕ 휴식</button>' +
+          '<button type="button" class="env-toggle-btn" data-rt="lot">🅿️ 주차장</button>' +
+          '<button type="button" class="env-toggle-btn" data-rt="park">🚙 주차</button>' +
+        '</div>' +
+        '<label class="modal-field-label">시작</label>' +
+        '<input type="datetime-local" step="1" id="addRecordStart" />' +
+        '<label class="modal-field-label">종료 (진행 중이면 비워두세요)</label>' +
+        '<input type="datetime-local" step="1" id="addRecordEnd" />' +
+        '<div class="popup-actions">' +
+          '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
+          '<button class="btn-primary" onclick="AppMap.confirmAddRecord(\'' + logId + '\',\'' + legId + '\')">추가</button>' +
+        '</div>'
+      );
+      var row = document.getElementById('addRecordTypeToggle');
+      if (row){
+        Array.prototype.forEach.call(row.querySelectorAll('.env-toggle-btn'), function(btn){
+          btn.addEventListener('click', function(){
+            Array.prototype.forEach.call(row.querySelectorAll('.env-toggle-btn'), function(b){ b.classList.remove('active'); });
+            btn.classList.add('active');
+            addRecordTypeChoice = btn.getAttribute('data-rt');
+          });
+        });
+      }
+    },
+    confirmAddRecord: function(logId, legId){
+      var log = logs.find(function(l){ return l.id === logId; });
+      var leg = log && (log.legs || []).find(function(lg){ return lg.id === legId; });
+      if (!log || !leg) return;
+      var startEl = document.getElementById('addRecordStart');
+      var endEl = document.getElementById('addRecordEnd');
+      var start = startEl ? fromLocalInputValue(startEl.value) : null;
+      var end = (endEl && endEl.value) ? fromLocalInputValue(endEl.value) : null;
+      if (!start){ showToast('시작 시각을 입력해주세요.'); return; }
+      var seg = { start: start, end: end };
+      var arr = resolveRecordArray(log, addRecordTypeChoice, legId);
+      if (!arr) return;
+      arr.push(seg);
+      closeModal();
+      saveLogs();
+      pushLogStateToCloud(log);
+      renderLogPanel();
+      renderLogList();
+    },
+    openAddEventModal: function(logId, legId){
+      addEventTypeChoice = 'special';
+      openModal(
+        '<h3>특이사항 추가</h3>' +
+        '<label class="modal-field-label">종류</label>' +
+        '<div class="env-toggle" id="addEventTypeToggle">' +
+          '<button type="button" class="env-toggle-btn active" data-et="special">⚠ 특수차량</button>' +
+          '<button type="button" class="env-toggle-btn" data-et="child">🧒 어린이</button>' +
+        '</div>' +
+        '<label class="modal-field-label">시각</label>' +
+        '<input type="datetime-local" step="1" id="addEventTime" />' +
+        '<div class="popup-actions">' +
+          '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
+          '<button class="btn-primary" onclick="AppMap.confirmAddEvent(\'' + logId + '\')">추가</button>' +
+        '</div>'
+      );
+      var row = document.getElementById('addEventTypeToggle');
+      if (row){
+        Array.prototype.forEach.call(row.querySelectorAll('.env-toggle-btn'), function(btn){
+          btn.addEventListener('click', function(){
+            Array.prototype.forEach.call(row.querySelectorAll('.env-toggle-btn'), function(b){ b.classList.remove('active'); });
+            btn.classList.add('active');
+            addEventTypeChoice = btn.getAttribute('data-et');
+          });
+        });
+      }
+    },
+    confirmAddEvent: function(logId){
+      var log = logs.find(function(l){ return l.id === logId; });
+      if (!log) return;
+      var timeEl = document.getElementById('addEventTime');
+      var t = timeEl ? fromLocalInputValue(timeEl.value) : null;
+      if (!t){ showToast('시각을 입력해주세요.'); return; }
+      if (!log.events) log.events = [];
+      log.events.push({ type: addEventTypeChoice, time: t });
+      closeModal();
+      saveLogs();
+      pushLogStateToCloud(log);
+      renderLogPanel();
+      renderLogList();
+    },
+    openEditRecordModal: function(logId, kind, refIndex, legId){
+      var log = logs.find(function(l){ return l.id === logId; });
+      if (!log) return;
+      var arr = resolveRecordArray(log, kind, legId);
+      var target = arr && arr[refIndex];
+      if (!target) return;
+      var isEvent = kind === 'event';
+      var html = '<h3>기록 수정</h3>' +
+        (isEvent
+          ? (
+              '<label class="modal-field-label">시각</label>' +
+              '<input type="datetime-local" step="1" id="editRecTime" value="' + toLocalInputValue(target.time) + '" />'
+            )
+          : (
+              '<label class="modal-field-label">시작</label>' +
+              '<input type="datetime-local" step="1" id="editRecStart" value="' + toLocalInputValue(target.start) + '" />' +
+              '<label class="modal-field-label">종료 (진행 중이면 비워두세요)</label>' +
+              '<input type="datetime-local" step="1" id="editRecEnd" value="' + ((target.end === null || target.end === undefined) ? '' : toLocalInputValue(target.end)) + '" />'
+            )
+        ) +
+        '<div class="popup-actions">' +
+          '<button class="btn-danger" onclick="AppMap.deleteRecord(\'' + logId + '\',\'' + kind + '\',' + refIndex + ',\'' + (legId || '') + '\')">삭제</button>' +
+          '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
+          '<button class="btn-primary" onclick="AppMap.confirmEditRecord(\'' + logId + '\',\'' + kind + '\',' + refIndex + ',\'' + (legId || '') + '\')">저장</button>' +
+        '</div>';
+      openModal(html);
+    },
+    confirmEditRecord: function(logId, kind, refIndex, legId){
+      var log = logs.find(function(l){ return l.id === logId; });
+      if (!log) return;
+      var arr = resolveRecordArray(log, kind, legId);
+      var target = arr && arr[refIndex];
+      if (!target) return;
+      if (kind === 'event'){
+        var timeEl = document.getElementById('editRecTime');
+        var t = timeEl ? fromLocalInputValue(timeEl.value) : null;
+        if (t) target.time = t;
+      } else {
+        var startEl = document.getElementById('editRecStart');
+        var endEl = document.getElementById('editRecEnd');
+        var newStart = startEl ? fromLocalInputValue(startEl.value) : null;
+        var newEnd = (endEl && endEl.value) ? fromLocalInputValue(endEl.value) : null;
+        if (newStart) target.start = newStart;
+        target.end = newEnd;
+      }
+      closeModal();
+      saveLogs();
+      pushLogStateToCloud(log);
+      renderLogPanel();
+      renderLogList();
+    },
+    deleteRecord: function(logId, kind, refIndex, legId){
+      var log = logs.find(function(l){ return l.id === logId; });
+      if (!log) return;
+      var arr = resolveRecordArray(log, kind, legId);
+      if (!arr || refIndex < 0 || refIndex >= arr.length) return;
+      arr.splice(refIndex, 1);
+      closeModal();
+      saveLogs();
+      pushLogStateToCloud(log);
+      renderLogPanel();
       renderLogList();
     },
     toggleShowAllLogs: function(){
