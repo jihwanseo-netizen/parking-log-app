@@ -1152,6 +1152,12 @@
       ? '<label class="modal-field-label">이름</label>' +
         '<input type="text" id="modalInput" value="' + escapeHtml(config.nameDefault || '') + '" placeholder="예: 강남파이낸스센터 주차장" />'
       : '';
+    // 주소는 GPS 자동인식(역지오코딩)에 기대지 않고 직접 써넣을 수 있게(지하주차장 등 신호가
+    // 없으면 자동인식이 안 되거나 부정확하기 때문) — 리포트의 "고속도로" 칸에 그대로 들어간다.
+    var addressField = config.showAddress
+      ? '<label class="modal-field-label">주소 (선택 · 리포트에 들어감)</label>' +
+        '<input type="text" id="modalAddressInput" value="' + escapeHtml(config.addressDefault || '') + '" placeholder="예: 서울 강남구 테헤란로 152" />'
+      : '';
     var envField = config.showEnv
       ? '<label class="modal-field-label">환경</label>' +
         '<div class="env-toggle" id="envToggle">' +
@@ -1166,6 +1172,7 @@
     openModal(
       '<h3>' + config.title + '</h3>' +
       nameField +
+      addressField +
       envField +
       '<label class="modal-field-label">SSD 번호</label>' +
       '<input type="text" id="modalSsdInput" value="' + escapeHtml(lastSSD) + '" placeholder="예: SSD-01" />' +
@@ -1267,6 +1274,7 @@
       if (l.startLat === undefined) l.startLat = null;
       if (l.startLng === undefined) l.startLng = null;
       if (l.address === undefined) l.address = '';
+      if (l.manualAddress === undefined) l.manualAddress = '';
       if (l.highwayRoadNames === undefined) l.highwayRoadNames = [];
       if (l.driveSegments === undefined) l.driveSegments = [];
       if (l.restSegments === undefined) l.restSegments = [];
@@ -1279,6 +1287,7 @@
           if (leg.lotMode === undefined) leg.lotMode = null;
           if (leg.lotSegments === undefined) leg.lotSegments = [];
           if (leg.parkSegments === undefined) leg.parkSegments = [];
+          if (leg.address === undefined) leg.address = '';
         });
       }
       if (!l.endTime){
@@ -1667,6 +1676,7 @@
       startLat: null,
       startLng: null,
       address: '',                // 시작 지점 주소 (역지오코딩으로 나중에 채워짐)
+      manualAddress: extra.manualAddress || '', // 직접 입력한 주소 — 있으면 리포트에서 이 값을 우선 사용
       highwayRoadNames: [],       // 고속도로 로깅 중 자동으로 인식된 구간명들(중복 없이, 순서대로)
       events: []                  // 일반도로 로깅 중 SPECIAL/아이 버튼 탭 기록 {type, time}
     };
@@ -1687,35 +1697,53 @@
     return log; // 트립 시작(startTrip)에서 방금 만든 log에 vehicle/legs 등을 추가로 채우기 위해 필요
   }
 
-  // 로깅 시작 지점의 GPS를 한 번만 찍어서, 리포트에 넣을 "주소"로 역지오코딩한다.
-  // (일반도로 로깅의 계속되는 경로 추적(watchPosition)과는 별개의, 시작 시점 단발성 위치 확인)
-  function captureStartLocation(log){
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(function(pos){
-      log.startLat = pos.coords.latitude;
-      log.startLng = pos.coords.longitude;
-      saveLogs();
-      pushLogStateToCloud(log);
-      reverseGeocodeStart(log);
-    }, function(){
-      // 위치 권한 거부/실패 — 로깅 자체는 계속 진행하고, 리포트의 주소 칸은 비워둠
-    }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 });
-  }
-  function reverseGeocodeStart(log){
-    // 무료 OpenStreetMap Nominatim 역지오코딩 (API 키 불필요). 오프라인/실패 시 조용히 넘어감 —
-    // 그래도 좌표는 저장돼 있으니 리포트에는 좌표라도 표시됨.
-    var url = 'https://nominatim.openstreetmap.org/reverse?format=json&lat=' + log.startLat + '&lon=' + log.startLng + '&zoom=18&addressdetails=0';
+  // 사람이 직접 타이핑하지 않아도 되도록, 위치 확인 + 역지오코딩을 자동으로 몇 번 재시도한다.
+  // 지하주차장처럼 로깅을 시작한 바로 그 순간엔 GPS나 통신 신호가 안 잡혀도, 잠시 뒤 신호가
+  // 잡히면서 나중에 성공하는 경우가 많아서 — 한 번 실패했다고 바로 포기하지 않고 15초 간격으로
+  // 최대 8번(약 2분)까지 다시 시도해본다. shouldContinue()가 false가 되면(로깅이 이미
+  // 끝났거나, 그새 다른 방법으로 주소가 채워졌으면) 더 시도하지 않고 조용히 멈춘다.
+  var ADDRESS_RETRY_INTERVAL_MS = 15000;
+  var ADDRESS_RETRY_MAX_ATTEMPTS = 8;
+  function reverseGeocodeLatLng(lat, lng, cb){
+    // 무료 OpenStreetMap Nominatim 역지오코딩 (API 키 불필요).
+    var url = 'https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lng + '&zoom=18&addressdetails=0';
     fetch(url, { headers: { 'Accept-Language': 'ko' } })
       .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(data){
-        if (data && data.display_name){
-          log.address = data.display_name;
-          saveLogs();
-          pushLogStateToCloud(log);
-          if (activeTab === 'logs') renderLogList();
-        }
-      })
-      .catch(function(){ /* 오프라인 등 — 무시 */ });
+      .then(function(data){ cb((data && data.display_name) || null); })
+      .catch(function(){ cb(null); /* 오프라인 등 — 무시 */ });
+  }
+  function autoCaptureAddress(shouldContinue, onAddress, attempt){
+    attempt = attempt || 0;
+    if (!shouldContinue() || !navigator.geolocation) return;
+    function scheduleRetry(){
+      if (attempt < ADDRESS_RETRY_MAX_ATTEMPTS && shouldContinue()){
+        setTimeout(function(){ autoCaptureAddress(shouldContinue, onAddress, attempt + 1); }, ADDRESS_RETRY_INTERVAL_MS);
+      }
+    }
+    navigator.geolocation.getCurrentPosition(function(pos){
+      if (!shouldContinue()) return;
+      reverseGeocodeLatLng(pos.coords.latitude, pos.coords.longitude, function(addr){
+        if (!shouldContinue()) return;
+        if (addr) onAddress(addr, pos.coords.latitude, pos.coords.longitude);
+        else scheduleRetry();
+      });
+    }, function(){
+      // 위치 권한 거부/실패 — 로깅 자체는 계속 진행하고, 계속 시도해볼 수 있으면 재시도
+      scheduleRetry();
+    }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 });
+  }
+  // 로깅 시작 지점 주소 자동 채우기 — 이미 직접 입력한 주소(manualAddress)가 있으면 자동으로
+  // 덮어쓰지 않는다(사람이 쓴 값이 우선).
+  function captureStartLocation(log){
+    autoCaptureAddress(
+      function(){ return !log.endTime && !log.manualAddress && !log.address; },
+      function(addr, lat, lng){
+        log.startLat = lat; log.startLng = lng; log.address = addr;
+        saveLogs();
+        pushLogStateToCloud(log);
+        if (activeTab === 'logs') renderLogList();
+      }
+    );
   }
   // 주행 중 현재 위치를 주기적으로 역지오코딩해서 "OO대로"/"OO고속도로" 같은 도로명을 자동으로
   // 알아내 본다(리포트의 "고속도로" 칸용 — 고속도로든 일반 도로든 인식된 이름을 전부 남겨서,
@@ -1821,6 +1849,7 @@
     return {
       id: 'leg_' + Date.now() + '_' + Math.floor(Math.random()*1000),
       destination: destination || '',
+      address: '',     // 이 목적지(주차장) 주소 — GPS 자동인식 없이 직접 입력(리포트의 "고속도로" 칸에 사용)
       startTime: Date.now(),
       endTime: null,
       events: [],
@@ -1957,6 +1986,22 @@
     pushLogStateToCloud(log);
     renderLogPanel();
     renderLogList();
+    if (mode) maybeAutoCaptureLegAddress(log, leg);
+  }
+  // 이 목적지(leg)에서 주차장/주차 기록을 처음 켤 때 그 위치 주소를 자동으로 채운다 — "목적지
+  // 수정"에서 직접 입력하지 않아도 되게. 이미 주소가 있으면(자동으로 채워졌든, 직접 입력했든)
+  // 다시 시도하지 않는다.
+  function maybeAutoCaptureLegAddress(log, leg){
+    if (leg.address) return;
+    autoCaptureAddress(
+      function(){ return !log.endTime && !leg.endTime && !leg.address; },
+      function(addr){
+        leg.address = addr;
+        saveLogs();
+        pushLogStateToCloud(log);
+        if (activeTab === 'logs') renderLogList();
+      }
+    );
   }
   // 회사 복귀(트립 종료): 예전엔 별도 "회사 복귀" 버튼이었지만, 이제 "오늘 로깅 종료 · 리포트
   // 보내기" 버튼 하나로 합쳐서 — 리포트를 만들기 전에 진행 중인 트립이 있으면 여기서 자동으로
@@ -2659,8 +2704,9 @@
         // 트립이 아니거나(또는 트립이어도 주행 시작/정지를 나눈 적이 없으면) 로깅 전체를 한 줄로.
         var wholeRoadNames = isRoad ? roadNamesForWindow(l, l.startTime, l.endTime) : '';
         var wholeEnv = isRoad ? envForRoadNames(l, wholeRoadNames) : '주차장';
-        // 주차장/주차 로깅의 "고속도로" 칸엔 도로명 대신 그 건물의 주소지(역지오코딩 결과)를 넣는다.
-        var wholeHighwayCol = isRoad ? wholeRoadNames : (l.address || '');
+        // 주차장/주차 로깅의 "고속도로" 칸엔 도로명 대신 그 건물의 주소를 넣는다 — 직접 입력한
+        // 주소(manualAddress)가 있으면 그걸 우선 쓰고, 없으면 역지오코딩 결과로 대신한다.
+        var wholeHighwayCol = isRoad ? wholeRoadNames : (l.manualAddress || l.address || '');
         pending.push({ start: l.startTime, args: [l, l.startTime, l.endTime, isRoad, wholeEnv, wholeHighwayCol, null, undefined] });
       } else {
         // 트립 안에서 "주행 기록 시작~정지"를 여러 번 오간 경우 — 같은 목적지로 가는 도중 잠깐씩
@@ -2706,11 +2752,11 @@
       (l.legs || []).forEach(function(leg){
         (leg.lotSegments || []).forEach(function(seg){
           var segEnd = (seg.end === null || seg.end === undefined) ? l.endTime : seg.end;
-          pending.push({ start: seg.start, args: [l, seg.start, segEnd, false, '주차장', '', leg.destination || '', 'parking_lot'] });
+          pending.push({ start: seg.start, args: [l, seg.start, segEnd, false, '주차장', leg.address || '', leg.destination || '', 'parking_lot'] });
         });
         (leg.parkSegments || []).forEach(function(seg){
           var segEnd = (seg.end === null || seg.end === undefined) ? l.endTime : seg.end;
-          pending.push({ start: seg.start, args: [l, seg.start, segEnd, false, '주차장', '', leg.destination || '', 'parking'] });
+          pending.push({ start: seg.start, args: [l, seg.start, segEnd, false, '주차장', leg.address || '', leg.destination || '', 'parking'] });
         });
       });
 
@@ -3195,9 +3241,11 @@
       var leg = log && (log.legs || []).find(function(lg){ return lg.id === legId; });
       if (!leg) return;
       openModal(
-        '<h3>목적지 이름 수정</h3>' +
+        '<h3>목적지 정보 수정</h3>' +
         '<label class="modal-field-label">목적지</label>' +
         '<input type="text" id="legDestInput" value="' + escapeHtml(leg.destination || '') + '" placeholder="예: 강남파이낸스센터" />' +
+        '<label class="modal-field-label">주소 (선택 · 리포트에 들어감)</label>' +
+        '<input type="text" id="legAddressInput" value="' + escapeHtml(leg.address || '') + '" placeholder="예: 서울 강남구 테헤란로 152" />' +
         '<div class="popup-actions">' +
           '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
           '<button class="btn-primary" onclick="AppMap.confirmEditLegDest(\'' + logId + '\',\'' + legId + '\')">저장</button>' +
@@ -3210,8 +3258,10 @@
       var leg = log && (log.legs || []).find(function(lg){ return lg.id === legId; });
       if (!leg) return;
       var input = document.getElementById('legDestInput');
+      var addrInput = document.getElementById('legAddressInput');
       var val = input ? input.value.trim() : '';
       if (val) leg.destination = val;
+      if (addrInput) leg.address = addrInput.value.trim();
       closeModal();
       saveLogs();
       pushLogStateToCloud(log);
@@ -3569,10 +3619,12 @@
     },
     confirmModal: function(){
       var nameEl = document.getElementById('modalInput');
+      var addressEl = document.getElementById('modalAddressInput');
       var ssdEl = document.getElementById('modalSsdInput');
       var driverEl = document.getElementById('modalDriverInput');
       var result = {
         name: nameEl ? nameEl.value.trim() : '',
+        address: addressEl ? addressEl.value.trim() : '',
         ssd: ssdEl ? ssdEl.value.trim() : '',
         driver: driverEl ? driverEl.value.trim() : '',
         highway: modalEnvChoice === 'highway'
@@ -3836,11 +3888,11 @@
       try { lastLotName = localStorage.getItem('lastLotName') || ''; } catch(e){}
       // 마지막으로 쓴 주차장 이름을 기본값으로 채워둠 — 같은 주차장이면 바로 "시작"만 누르면 되고,
       // 다른 주차장으로 바뀌었으면 입력창이 자동 선택된 상태라 바로 새 이름을 타이핑해서 덮어쓰면 됨.
-      openStartModal({ title: '주차장 로깅 시작', showName: true, nameDefault: lastLotName, showEnv: false }, function(res){
+      openStartModal({ title: '주차장 로깅 시작', showName: true, nameDefault: lastLotName, showAddress: true, showEnv: false }, function(res){
         if (res.name){ try { localStorage.setItem('lastLotName', res.name); } catch(e){} }
         if (res.ssd){ try { localStorage.setItem('lastSSD', res.ssd); } catch(e){} }
         if (res.driver){ try { localStorage.setItem('lastDriver', res.driver); } catch(e){} }
-        startLog('parking_lot', res.name, { ssd: res.ssd, driver: res.driver });
+        startLog('parking_lot', res.name, { ssd: res.ssd, driver: res.driver, manualAddress: res.address });
       });
     });
     document.getElementById('btnParking').addEventListener('click', function(){
@@ -3856,7 +3908,9 @@
       var inherited = lastLot ? (lastLot.label + ' - 주차') : undefined;
       var inheritedSsd = lastLot ? lastLot.ssd : undefined;
       var inheritedDriver = lastLot ? lastLot.driver : undefined;
-      startLog('parking', inherited, { ssd: inheritedSsd, driver: inheritedDriver });
+      // 주소도 방금 전 주차장 로깅에서 쓴 값을 그대로 물려받는다(같은 주차장 안이므로).
+      var inheritedAddress = lastLot ? (lastLot.manualAddress || lastLot.address) : undefined;
+      startLog('parking', inherited, { ssd: inheritedSsd, driver: inheritedDriver, manualAddress: inheritedAddress });
     });
     document.getElementById('btnSpecial').addEventListener('click', function(){
       AppMap.tapEvent('special');
