@@ -2797,16 +2797,17 @@
   var TIMER_COLOR_FROM = [244, 242, 236]; // var(--ink)
   var TIMER_COLOR_TO   = [229, 72, 77];   // 경고색 (LIVE 배지와 동일 톤)
 
-  // 트립의 driveSegments(주행 기록 시작~정지/휴식 사이 구간들)를 다 더해서, "실제로 기록 중이던
-  // 시간"만 계산한다. 끝나지 않고 열려있는 마지막 구간은 지금 시각까지로 쳐서 더한다.
-  function sumDriveSegmentsMs(log){
+  // "주행 기록 시작"을 누른 시점부터 "정지/휴식"으로 바뀌기 전까지, 그 구간(가장 최근 구간)만
+  // 계산한다 — 예전 구간들과 합치지 않는다. 그래서 정지했다가 다시 "주행 기록 시작"을 누르면
+  // 이전에 흐른 시간과 이어지지 않고 0부터 다시 흐른다("정지했다 다시 시작하면 이어서 누적되는
+  // 방식은 원하지 않는다"는 피드백으로 합산(sum) 대신 최근 구간만 보도록 수정).
+  // 아직 정지 전(구간이 열려 있음, end === null)이면 지금 시각까지로 쳐서 계산한다.
+  function currentDriveSegmentMs(log){
     var segs = (log && log.driveSegments) || [];
-    var total = 0;
-    segs.forEach(function(seg){
-      var end = (seg.end !== null && seg.end !== undefined) ? seg.end : Date.now();
-      total += Math.max(0, end - seg.start);
-    });
-    return total;
+    if (!segs.length) return 0;
+    var last = segs[segs.length - 1];
+    var end = (last.end !== null && last.end !== undefined) ? last.end : Date.now();
+    return Math.max(0, end - last.start);
   }
   function updateTimerText(){
     var timer = document.getElementById('logTimer');
@@ -2819,7 +2820,7 @@
     // (기록을 시작하기도 전인 대기 상태에서부터 시간이 흘러가면 헷갈린다는 피드백으로 수정).
     // 트립이 아닌 일반도로/주차장/주차 로깅은 켜져 있는 동안 계속 흐르는 게 맞으므로 그대로 둔다.
     var isTrip = !!(log.legs && log.legs.length);
-    var elapsed = isTrip ? sumDriveSegmentsMs(log) : (Date.now() - log.startTime);
+    var elapsed = isTrip ? currentDriveSegmentMs(log) : (Date.now() - log.startTime);
     var text = formatDuration(elapsed);
     timer.textContent = text;
 
