@@ -1566,8 +1566,10 @@
   }
 
   function makePinHtml(spot){
+    // 방문완료인 곳은 높이값(파란/주황/회색 구분)과 상관없이 그냥 파란색으로 통일해서 표시한다
+    // — 지도에서 "다녀온 곳"이라는 게 색으로 바로 구분되게 하려는 것.
     var cat = heightCategory(spot.height);
-    var color = cat === 'blue' ? '#2F6FED' : cat === 'orange' ? '#D9731D' : '#74777C';
+    var color = spot.visited ? '#2F6FED' : (cat === 'blue' ? '#2F6FED' : cat === 'orange' ? '#D9731D' : '#74777C');
     var doneClass = spot.visited ? 'done' : '';
     // 지도(kakao.maps.Map) 자체에도 클릭 리스너가 걸려 있어서(새 장소 등록용), 핀 클릭 이벤트를 막지
     // 않으면 핀을 눌렀을 때 "이 장소 팝업 열기"와 "그 자리에 새 장소 등록 팝업 열기"가 동시에 발생해
