@@ -691,6 +691,9 @@
   }
   .modal-field-label:first-child{ margin-top: 0; }
   .env-toggle{ display: flex; gap: 6px; }
+  /* 특이사항 추가 모달처럼 옵션이 4개일 때는 한 줄에 욱여넣지 않고 2x2로 줄바꿈 */
+  #addEventTypeToggle{ flex-wrap: wrap; }
+  #addEventTypeToggle .env-toggle-btn{ flex: 1 1 calc(50% - 3px); }
   .env-toggle-btn{
     flex: 1; padding: 8px 0; background: transparent;
     border: 1px solid var(--line); border-radius: 8px;
@@ -1078,13 +1081,10 @@
   // 트립은 새로운 병렬 로깅 종류가 아니라, 기존 '일반도로' 로깅(log.type==='road')을 그대로 감싸서
   // 시작한다 — 즉 활성 로깅 하나(activeRoadId)에 legs 배열이 들어있으면 그게 트립이다.
   var TRIP_TAGS = [
-    { key: 'special',      label: '⚠ 특수차량' },
-    { key: 'child',        label: '🧒 어린이' },
-    { key: 'pm',           label: '🛴 PM' },
-    { key: 'construction', label: '🚧 공사중' },
-    { key: 'narrow_alley', label: '🛣 좁은 골목' },
-    { key: 'pedestrian',   label: '🚶 보행자 많음' },
-    { key: 'etc',          label: '❓ 기타' }
+    { key: 'special',  label: '⚠ 특수차량' },
+    { key: 'child',    label: '🧒 어린이' },
+    { key: 's_curve',  label: '〰 S자' },
+    { key: 'etc',      label: '❓ 기타' }
   ];
   var tripModalVehicle = 'LX2'; // 트립 시작 모달에서 고른 차종 (LX2/GN7) — 임시 선택값
   var tripPanelLegId = null;    // 트립 패널의 메모/체크박스를 leg가 바뀔 때만 다시 채우기 위한 추적용
@@ -2820,7 +2820,9 @@
   // SPECIAL/아이 탭 이벤트를 지난기록 타임라인에 개별 줄로 보여줄 때 쓰는 라벨/아이콘
   var EVENT_META = {
     special: { icon: '⚠', label: '특수차량' },
-    child:   { icon: '🧒', label: '어린이' }
+    child:   { icon: '🧒', label: '어린이' },
+    s_curve: { icon: '〰', label: 'S자' },
+    etc:     { icon: '❓', label: '기타' }
   };
   var WEEKDAY_KO = ['일', '월', '화', '수', '목', '금', '토'];
   // 날짜 구분 헤더용 — "2026.09.10 (목)"
@@ -3326,6 +3328,8 @@
         '<div class="env-toggle" id="addEventTypeToggle">' +
           '<button type="button" class="env-toggle-btn active" data-et="special">⚠ 특수차량</button>' +
           '<button type="button" class="env-toggle-btn" data-et="child">🧒 어린이</button>' +
+          '<button type="button" class="env-toggle-btn" data-et="s_curve">〰 S자</button>' +
+          '<button type="button" class="env-toggle-btn" data-et="etc">❓ 기타</button>' +
         '</div>' +
         '<label class="modal-field-label">시각</label>' +
         '<input type="datetime-local" step="1" id="addEventTime" />' +
