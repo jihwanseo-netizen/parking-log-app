@@ -151,6 +151,19 @@
     border-bottom: 1px solid var(--line);
     flex-shrink: 0;
   }
+  .import-spots-btn{
+    width: 100%;
+    padding: 9px 0;
+    margin-bottom: 8px;
+    background: transparent;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius);
+    color: var(--ink-dim);
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .import-spots-btn:hover{ color: var(--yellow); border-color: var(--yellow); }
   #search{
     width: 100%;
     padding: 9px 12px;
@@ -238,6 +251,15 @@
     font-size: 12px;
     color: var(--ink-dim);
     margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .item-address{
+    font-size: 11.5px;
+    color: var(--ink-dim);
+    margin-top: 2px;
+    opacity: 0.8;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -675,7 +697,11 @@
     border-radius: 12px;
     padding: 18px;
     width: 280px;
+    max-height: 85vh;
+    overflow-y: auto;
   }
+  /* 장소 목록 가져오기처럼 여러 줄 텍스트를 붙여넣는 모달은 기본 280px보다 조금 넓혀준다 */
+  #modalBox.modal-wide{ width: 320px; }
   #modalBox h3{ margin: 0 0 4px 0; font-size: 15px; font-weight: 800; }
   #modalBox p{ margin: 0 0 10px 0; font-size: 12px; color: var(--ink-dim); }
   #modalBox input[type=text]{
@@ -684,6 +710,13 @@
     font-size: 13.5px; outline: none; font-family: inherit;
   }
   #modalBox input[type=text]:focus{ border-color: var(--yellow); }
+  #modalBox textarea{
+    width: 100%; padding: 9px 10px; background: var(--asphalt);
+    border: 1px solid var(--line); border-radius: 8px; color: var(--ink);
+    font-size: 12.5px; outline: none; font-family: inherit; resize: vertical;
+    min-height: 120px;
+  }
+  #modalBox textarea:focus{ border-color: var(--yellow); }
   #modalBox .popup-actions{ margin-top: 14px; }
   .modal-field-label{
     display: block; font-size: 11px; color: var(--ink-dim);
@@ -838,6 +871,7 @@
 
   .popup-view-name{ font-size: 15px; font-weight: 800; margin: 0 0 2px 0; }
   .popup-view-height{ font-size: 12.5px; color: var(--ink-dim); margin-bottom: 4px; }
+  .popup-view-address{ font-size: 12px; color: var(--ink-dim); margin-bottom: 4px; line-height: 1.35; }
   .popup-view-note{ font-size: 12.5px; color: var(--ink); margin-bottom: 8px; line-height: 1.4; }
 
   /* ---------- Mobile bottom nav (map / checklist / logs as full-screen tabs) ---------- */
@@ -974,6 +1008,7 @@
       <button class="tab-btn" data-tab="logs">로깅 기록</button>
     </div>
     <div id="controls">
+      <button id="btnImportSpots" type="button" class="import-spots-btn">📥 장소 목록 가져오기</button>
       <input id="search" type="text" placeholder="장소 이름 검색" />
       <div id="filters">
         <button class="filter-btn active" data-filter="all">전체</button>
@@ -1133,7 +1168,9 @@
 
   /* ---------- Modal ---------- */
   function openModal(html){
-    document.getElementById('modalBox').innerHTML = html;
+    var box = document.getElementById('modalBox');
+    box.innerHTML = html;
+    box.classList.remove('modal-wide'); // 모달마다 필요한 너비가 다르므로 매번 기본값으로 되돌린다
     document.getElementById('modalOverlay').classList.add('open');
   }
   function closeModal(){
@@ -1553,9 +1590,11 @@
 
   function viewPopupHtml(spot){
     var noteHtml = spot.note ? '<div class="popup-view-note">' + escapeHtml(spot.note) + '</div>' : '';
+    var addressHtml = spot.address ? '<div class="popup-view-address">📍 ' + escapeHtml(spot.address) + '</div>' : '';
     return '<div class="popup-form">' +
       '<div class="popup-view-name">' + escapeHtml(spot.name) + '</div>' +
       '<div class="popup-view-height">높이: ' + heightLabel(spot.height) + (spot.visited ? ' · 방문완료' : ' · 미방문') + '</div>' +
+      addressHtml +
       noteHtml +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" onclick="AppMap.toggleVisited(\'' + spot.id + '\')">' + (spot.visited ? '미방문으로' : '방문완료로') + '</button>' +
@@ -1641,6 +1680,7 @@
             '<span class="badge ' + cat + '">' + heightLabel(s.height) + '</span>' +
           '</div>' +
           (s.note ? '<div class="item-note">' + escapeHtml(s.note) + '</div>' : '') +
+          (s.address ? '<div class="item-address">📍 ' + escapeHtml(s.address) + '</div>' : '') +
         '</div>' +
         '<button class="item-del" onclick="event.stopPropagation(); AppMap.deleteSpot(\'' + s.id + '\')">&times;</button>' +
       '</div>';
@@ -1744,6 +1784,66 @@
         if (activeTab === 'logs') renderLogList();
       }
     );
+  }
+  /* ---------- 장소 목록 일괄 가져오기 (주소 -> 좌표, 정지오코딩) ----------
+     "구, 건물명, 주소" 형태로 여러 줄을 붙여넣으면 각 줄의 주소를 좌표로 바꿔서 장소
+     체크리스트(spots)에 한 번에 등록한다. 역지오코딩(좌표->주소, 위의 reverseGeocodeLatLng)과
+     반대 방향이라 Nominatim 대신 카카오맵 SDK의 Geocoder(services 라이브러리)를 쓴다 — 한국
+     지번 주소 인식 정확도가 훨씬 높고, 이미 로드된 지도 SDK를 그대로 재사용할 수 있어서다. */
+  var geocoderInstance = null;
+  function geocodeAddress(address, cb){
+    if (typeof kakao === 'undefined' || !kakao.maps || !kakao.maps.services || !kakao.maps.services.Geocoder){
+      cb(null);
+      return;
+    }
+    if (!geocoderInstance) geocoderInstance = new kakao.maps.services.Geocoder();
+    geocoderInstance.addressSearch(address, function(result, status){
+      if (status === kakao.maps.services.Status.OK && result && result.length){
+        cb({ lat: parseFloat(result[0].y), lng: parseFloat(result[0].x) });
+      } else {
+        cb(null);
+      }
+    });
+  }
+  // 엑셀에서 복사해 붙여넣으면 탭으로 구분되고, 손으로 입력하면 쉼표를 쓰는 경우가 많아 둘 다
+  // 지원한다. 컬럼이 2개면 (이름, 주소), 3개 이상이면 (구, 이름, 주소)로 해석 — 구 컬럼은
+  // 주소 안에 이미 포함돼 있는 경우가 많아 note(메모)로만 남겨서 목록에서 구분할 수 있게 한다.
+  function parseBulkImportRows(text){
+    var lines = (text || '').split(/\r\n|\n/);
+    var rows = [];
+    lines.forEach(function(line){
+      var trimmed = line.trim();
+      if (!trimmed) return;
+      var parts = trimmed.indexOf('\t') !== -1 ? trimmed.split('\t') : trimmed.split(',');
+      parts = parts.map(function(p){ return p.trim(); }).filter(function(p){ return p !== ''; });
+      if (parts.length < 2) return; // 최소 이름+주소는 있어야 등록 가능
+      var district, name, address;
+      if (parts.length >= 3){
+        district = parts[0]; name = parts[1]; address = parts.slice(2).join(' ');
+      } else {
+        district = ''; name = parts[0]; address = parts[1];
+      }
+      rows.push({ district: district, name: name, address: address });
+    });
+    return rows;
+  }
+  function openBulkImportModal(){
+    openModal(
+      '<h3>장소 목록 가져오기</h3>' +
+      '<p>"구, 건물명, 주소" 형식으로 한 줄에 하나씩 붙여넣으세요. 엑셀에서 복사하면 탭으로 자동 구분돼요. 주소로 위치를 자동으로 찾아 지도에 등록합니다(높이는 미확인으로 등록되고, 나중에 현장에서 채우면 돼요).</p>' +
+      '<textarea id="bulkImportInput" rows="8" placeholder="강남구	케이투코리아 주식회사	서울특별시 강남구 자곡동 648번지"></textarea>' +
+      '<p id="bulkImportProgress" style="display:none;"></p>' +
+      '<div class="popup-actions">' +
+        '<button class="btn-secondary" id="bulkImportCancelBtn" onclick="AppMap.cancelModal()">취소</button>' +
+        '<button class="btn-primary" id="bulkImportConfirmBtn" onclick="AppMap.confirmBulkImport()">가져오기</button>' +
+      '</div>'
+    );
+    var box = document.getElementById('modalBox');
+    if (box) box.classList.add('modal-wide');
+    setTimeout(function(){
+      var el = document.getElementById('bulkImportInput');
+      if (el) el.focus();
+    }, 30);
   }
   // 주행 중 현재 위치를 주기적으로 역지오코딩해서 "OO대로"/"OO고속도로" 같은 도로명을 자동으로
   // 알아내 본다(리포트의 "고속도로" 칸용 — 고속도로든 일반 도로든 인식된 이름을 전부 남겨서,
@@ -3604,6 +3704,92 @@
       modalOnSave = null;
       closeModal();
     },
+    confirmBulkImport: function(){
+      var textEl = document.getElementById('bulkImportInput');
+      var text = textEl ? textEl.value : '';
+      var rows = parseBulkImportRows(text);
+      if (rows.length === 0){
+        showToast('가져올 줄이 없어요. "구, 건물명, 주소" 형식을 확인해주세요.');
+        return;
+      }
+      // 이름+주소가 완전히 같은 장소는 중복 등록하지 않는다(같은 목록을 실수로 두 번 붙여넣는 경우 대비).
+      var existingKeys = {};
+      spots.forEach(function(s){ existingKeys[(s.name || '') + '|' + (s.address || '')] = true; });
+      var toImport = rows.filter(function(r){ return !existingKeys[r.name + '|' + r.address]; });
+      var skipped = rows.length - toImport.length;
+      if (toImport.length === 0){
+        showToast('붙여넣은 ' + rows.length + '개가 전부 이미 등록돼 있어요.');
+        closeModal();
+        return;
+      }
+
+      var confirmBtn = document.getElementById('bulkImportConfirmBtn');
+      var cancelBtn = document.getElementById('bulkImportCancelBtn');
+      var progressEl = document.getElementById('bulkImportProgress');
+      if (confirmBtn) confirmBtn.disabled = true;
+      if (cancelBtn) cancelBtn.disabled = true;
+      if (progressEl) progressEl.style.display = 'block';
+
+      var succeeded = 0;
+      var failed = [];
+      var idx = 0;
+
+      function ensureGeocoderReady(cb, waited){
+        waited = waited || 0;
+        if (typeof kakao !== 'undefined' && kakao.maps && kakao.maps.services && kakao.maps.services.Geocoder){ cb(true); return; }
+        if (waited >= 15000){ cb(false); return; }
+        setTimeout(function(){ ensureGeocoderReady(cb, waited + 400); }, 400);
+      }
+      function processNext(){
+        if (idx >= toImport.length){ finish(); return; }
+        var row = toImport[idx];
+        idx++;
+        if (progressEl) progressEl.textContent = '가져오는 중… (' + idx + '/' + toImport.length + ')';
+        geocodeAddress(row.address, function(coord){
+          if (coord){
+            var newSpot = {
+              id: 'sp_' + Date.now() + '_' + Math.floor(Math.random()*1000) + '_' + idx,
+              lat: coord.lat,
+              lng: coord.lng,
+              name: row.name,
+              address: row.address,
+              height: null,
+              note: row.district || '',
+              visited: false,
+              createdAt: Date.now()
+            };
+            spots.push(newSpot);
+            pushSpotToCloud(newSpot);
+            succeeded++;
+          } else {
+            failed.push(row.name + ' (' + row.address + ')');
+          }
+          // 카카오 Geocoder에 짧은 시간에 너무 많은 요청을 몰아치지 않도록 약간 간격을 둔다.
+          setTimeout(processNext, 150);
+        });
+      }
+      function finish(){
+        saveSpots();
+        renderAll();
+        closeModal();
+        var msg = succeeded + '개 등록 완료';
+        if (skipped) msg += ' (중복 ' + skipped + '개 제외)';
+        if (failed.length) msg += ', ' + failed.length + '개 실패(주소를 찾지 못함)';
+        showToast(msg, 3500);
+        if (failed.length) console.warn('주소를 찾지 못한 장소:', failed);
+      }
+
+      ensureGeocoderReady(function(ready){
+        if (!ready){
+          if (confirmBtn) confirmBtn.disabled = false;
+          if (cancelBtn) cancelBtn.disabled = false;
+          if (progressEl) progressEl.style.display = 'none';
+          showToast('지도 서비스를 아직 불러오지 못했어요. 잠시 후 다시 시도해주세요.');
+          return;
+        }
+        processNext();
+      });
+    },
     skipTeamCode: function(){
       try { localStorage.setItem(TEAM_CODE_PROMPTED_KEY, '1'); } catch(e){}
       closeModal();
@@ -3715,6 +3901,7 @@
           lat: pendingLatLng.lat,
           lng: pendingLatLng.lng,
           name: name,
+          address: '',
           height: height,
           note: note,
           visited: false,
@@ -3846,6 +4033,7 @@
   });
 
   function bindControls(){
+    document.getElementById('btnImportSpots').addEventListener('click', openBulkImportModal);
     document.getElementById('search').addEventListener('input', function(e){
       searchTerm = e.target.value;
       renderList();
@@ -4035,6 +4223,6 @@
 })();
 
 </script>
-<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=5b2873fe0317b06e6507efe9231f3691"></script>
+<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=5b2873fe0317b06e6507efe9231f3691&libraries=services"></script>
 </body>
 </html>
