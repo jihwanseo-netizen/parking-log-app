@@ -2797,6 +2797,17 @@
   var TIMER_COLOR_FROM = [244, 242, 236]; // var(--ink)
   var TIMER_COLOR_TO   = [229, 72, 77];   // 경고색 (LIVE 배지와 동일 톤)
 
+  // 트립의 driveSegments(주행 기록 시작~정지/휴식 사이 구간들)를 다 더해서, "실제로 기록 중이던
+  // 시간"만 계산한다. 끝나지 않고 열려있는 마지막 구간은 지금 시각까지로 쳐서 더한다.
+  function sumDriveSegmentsMs(log){
+    var segs = (log && log.driveSegments) || [];
+    var total = 0;
+    segs.forEach(function(seg){
+      var end = (seg.end !== null && seg.end !== undefined) ? seg.end : Date.now();
+      total += Math.max(0, end - seg.start);
+    });
+    return total;
+  }
   function updateTimerText(){
     var timer = document.getElementById('logTimer');
     var urgentTimer = document.getElementById('urgentTimer');
@@ -2804,7 +2815,11 @@
     if (!refId) return;
     var log = logs.find(function(l){ return l.id === refId; });
     if (!log) return;
-    var elapsed = Date.now() - log.startTime;
+    // 트립(주차 탐색)은 "주행 기록 시작"을 눌러야 시간이 흐르고, 휴식/정지 중엔 멈춰 있어야 한다
+    // (기록을 시작하기도 전인 대기 상태에서부터 시간이 흘러가면 헷갈린다는 피드백으로 수정).
+    // 트립이 아닌 일반도로/주차장/주차 로깅은 켜져 있는 동안 계속 흐르는 게 맞으므로 그대로 둔다.
+    var isTrip = !!(log.legs && log.legs.length);
+    var elapsed = isTrip ? sumDriveSegmentsMs(log) : (Date.now() - log.startTime);
     var text = formatDuration(elapsed);
     timer.textContent = text;
 
