@@ -1837,16 +1837,30 @@
       }
     });
   }
-  // 엑셀에서 복사해 붙여넣으면 탭으로 구분되고, 손으로 입력하면 쉼표를 쓰는 경우가 많아 둘 다
-  // 지원한다. 컬럼이 2개면 (이름, 주소), 3개 이상이면 (구, 이름, 주소)로 해석 — 구 컬럼은
-  // 주소 안에 이미 포함돼 있는 경우가 많아 note(메모)로만 남겨서 목록에서 구분할 수 있게 한다.
+  // 엑셀에서 복사해 붙여넣으면 탭으로 구분되고, 손으로 입력하면 쉼표나 "이름: 주소"처럼 콜론을
+  // 쓰는 경우도 많아 세 가지 다 지원한다(우선순위: 탭 > 쉼표 > 콜론). 콜론은 이름/주소 딱 2개만
+  // 구분하는 용도로만 쓰고(구 정보까지 콜론으로 3단 구분하는 경우는 드물어서), 주소 안에 콜론이
+  // 더 있어도 첫 번째 콜론 기준으로만 나눈다. 컬럼이 2개면 (이름, 주소), 3개 이상이면
+  // (구, 이름, 주소)로 해석 — 구 컬럼은 주소 안에 이미 포함돼 있는 경우가 많아 note(메모)로만
+  // 남겨서 목록에서 구분할 수 있게 한다.
   function parseBulkImportRows(text){
     var lines = (text || '').split(/\r\n|\n/);
     var rows = [];
     lines.forEach(function(line){
       var trimmed = line.trim();
       if (!trimmed) return;
-      var parts = trimmed.indexOf('\t') !== -1 ? trimmed.split('\t') : trimmed.split(',');
+      var parts;
+      if (trimmed.indexOf('\t') !== -1){
+        parts = trimmed.split('\t');
+      } else if (trimmed.indexOf(',') !== -1){
+        parts = trimmed.split(',');
+      } else if (trimmed.indexOf(':') !== -1 || trimmed.indexOf('：') !== -1){
+        var sep = trimmed.indexOf(':') !== -1 ? ':' : '：';
+        var at = trimmed.indexOf(sep);
+        parts = [trimmed.slice(0, at), trimmed.slice(at + 1)];
+      } else {
+        parts = [trimmed];
+      }
       parts = parts.map(function(p){ return p.trim(); }).filter(function(p){ return p !== ''; });
       if (parts.length < 2) return; // 최소 이름+주소는 있어야 등록 가능
       var district, name, address;
@@ -1872,7 +1886,7 @@
     var confirmLabel = bulkImportMarkVisited ? '방문 장소로 등록' : '가져오기';
     openModal(
       '<h3>' + title + '</h3>' +
-      '<p>' + desc + ' 한 줄에 하나씩 붙여넣으세요. "건물명, 주소"만 있어도 되고, 앞에 "구" 정보가 더 있어도 돼요("구, 건물명, 주소"). 엑셀에서 복사하면 탭으로 자동 구분돼요. 주소로 위치를 자동으로 찾아 지도에 등록하고, 이미 등록된 것과 겹치는 줄은 자동으로 걸러져요(높이는 미확인으로 등록되고, 나중에 현장에서 채우면 돼요).</p>' +
+      '<p>' + desc + ' 한 줄에 하나씩 붙여넣으세요. "건물명, 주소"만 있어도 되고, 앞에 "구" 정보가 더 있어도 돼요("구, 건물명, 주소"). 쉼표 대신 "건물명: 주소"처럼 콜론으로 구분해도 되고, 엑셀에서 복사하면 탭으로 자동 구분돼요. 주소로 위치를 자동으로 찾아 지도에 등록하고, 이미 등록된 것과 겹치는 줄은 자동으로 걸러져요(높이는 미확인으로 등록되고, 나중에 현장에서 채우면 돼요).</p>' +
       '<textarea id="bulkImportInput" rows="8" placeholder="케이투코리아 주식회사	서울특별시 강남구 자곡동 648번지&#10;강남구	강남 에이스타워	서울특별시 강남구 자곡동 649번지"></textarea>' +
       '<p id="bulkImportProgress" style="display:none;"></p>' +
       '<div class="popup-actions">' +
