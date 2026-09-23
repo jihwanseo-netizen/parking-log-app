@@ -340,8 +340,13 @@
   .log-timer{
     font-variant-numeric: tabular-nums;
     color: var(--ink);
-    font-weight: 700;
-    transition: color 1s linear;
+    font-weight: 800;
+    font-size: 17px;
+    padding: 3px 11px;
+    border-radius: 999px;
+    background: var(--asphalt-2);
+    border: 1px solid var(--line);
+    transition: color 1s linear, background-color 0.3s;
   }
   .log-timer.log-timer-overdue{
     animation: timerOverduePulse 1s ease-in-out infinite;
@@ -982,9 +987,9 @@
         <span id="logStatusText">로깅 대기 중</span>
         <span class="log-timer" id="logTimer" style="margin-left:auto; display:none;"></span>
       </div>
-      <button class="trip-start-btn" id="btnTripStart" type="button">🚗 주차 탐색 기록 시작</button>
+      <button class="trip-start-btn" id="btnTripStart" type="button">🚗 로깅 기록 시작</button>
       <div class="log-btn-row" id="mainLogBtnRow">
-        <button class="log-btn" id="btnRoad">일반도로 로깅 시작</button>
+        <button class="log-btn" id="btnRoad">주행 로깅 시작</button>
         <button class="log-btn" id="btnLot">주차장 로깅 시작</button>
         <button class="log-btn" id="btnParking">주차 로깅 시작</button>
       </div>
@@ -2402,7 +2407,7 @@
     var lastDriver = '';
     try { lastDriver = localStorage.getItem('lastDriver') || ''; } catch(e){}
     openModal(
-      '<h3>주차 탐색 기록 시작</h3>' +
+      '<h3>로깅 기록 시작</h3>' +
       '<label class="modal-field-label">출발 키로수 (선택)</label>' +
       '<input type="number" id="modalStartKm" placeholder="예: 12345" />' +
       '<label class="modal-field-label">차종</label>' +
@@ -2711,7 +2716,7 @@
 
       // road button
       var roadBlocked = !!(activeLotId || activeParkingId);
-      btnRoad.textContent = activeRoadId ? '일반도로 로깅 종료' : '일반도로 로깅 시작';
+      btnRoad.textContent = activeRoadId ? '주행 로깅 종료' : '주행 로깅 시작';
       btnRoad.className = 'log-btn' + (activeRoadId ? ' on-road' : '') + (roadBlocked ? ' blocked' : '');
 
       // lot button
@@ -2753,14 +2758,19 @@
       }
     } else if (activeRoadId){
       dot.className = 'log-status-dot on';
-      text.textContent = '일반도로 로깅 중';
+      text.textContent = '주행 로깅 중';
     } else {
       dot.className = 'log-status-dot';
       text.textContent = '로깅 대기 중';
     }
 
     if (anyActive){
-      timer.style.display = trip ? 'none' : 'inline'; // 트립 중엔 트립 패널 안의 leg별 타이머를 대신 보여줌
+      // 트립(주차 탐색) 중에도 트립 패널 안의 leg별 타이머(지금 목적지에서 얼마나 지났는지)만
+      // 보여주고 이 상단 타이머는 숨겼었는데, 그러면 "로깅을 시작한 뒤로 총 얼마나 지났는지"를
+      // 볼 방법이 없었다. 이제는 트립 중에도 계속 보여준다 — activeRoadId가 트립의 log.id를
+      // 그대로 가리키므로(activeTripLog 참고) updateTimerText()가 자동으로 트립 전체 경과
+      // 시간(트립 시작 시각 기준)을 계산해서 보여준다.
+      timer.style.display = 'inline';
       updateTimerText();
       if (!timerInterval){
         timerInterval = setInterval(function(){
@@ -3443,7 +3453,7 @@
     // (실시간 경로 추적 중이 아니면 따라갈 위치 자체가 없음).
     toggleFollow: function(){
       if (!activeRoadId){
-        showToast('일반도로 로깅 중에만 사용할 수 있어요.', 1500);
+        showToast('주행 로깅 중에만 사용할 수 있어요.', 1500);
         return;
       }
       followMode = !followMode;
@@ -4216,7 +4226,7 @@
       }
       // SSD 번호는 직전 값이 자동으로 채워지고 선택돼 있어서, 안 바뀌었으면 그냥 "시작"만 누르면 됨.
       // 환경(일반도로/고속도로)도 기본값(일반도로)이 이미 선택돼 있어 한 번의 탭으로 시작 가능.
-      openStartModal({ title: '일반도로 로깅 시작', showName: false, showEnv: true }, function(res){
+      openStartModal({ title: '주행 로깅 시작', showName: false, showEnv: true }, function(res){
         if (res.ssd){ try { localStorage.setItem('lastSSD', res.ssd); } catch(e){} }
         if (res.driver){ try { localStorage.setItem('lastDriver', res.driver); } catch(e){} }
         startLog('road', null, { ssd: res.ssd, driver: res.driver, highway: res.highway });
