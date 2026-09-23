@@ -1055,7 +1055,7 @@
     <div id="map"></div>
     <div id="mapFabs">
       <button id="btnVisited" class="map-fab" type="button" onclick="AppMap.toggleVisitedPins()" title="갔던 곳 보기">📍</button>
-      <button id="btnCandidates" class="map-fab" type="button" onclick="AppMap.toggleCandidatePins()" title="안 갔던 곳 보기">🧭</button>
+      <button id="btnCandidates" class="map-fab active" type="button" onclick="AppMap.toggleCandidatePins()" title="안 갔던 곳(미방문) 껐다 켰다">🧭</button>
       <button id="btnFollow" class="map-fab" type="button" onclick="AppMap.toggleFollow()" title="현위치 따라가기">🎯</button>
       <button id="btnRefresh" class="map-fab" type="button" onclick="AppMap.refreshApp()" title="새로고침">↻</button>
     </div>
@@ -1138,7 +1138,10 @@
   var highwaySampleTimestamps = {}; // logId -> 마지막으로 구간명을 확인한 시각(로컬 전용, 클라우드로 동기화 안 됨)
   var followMode = false; // true면 실시간 위치가 갱신될 때마다 지도를 그 위치로 따라감(일반도로 로깅 중에만 동작)
   var showVisited = false; // true일 때만 '갔던 곳'(visited=true) 핀을 지도에 표시. 평소엔 숨겨서 지도가 복잡해지지 않게 함
-  var showCandidates = false; // true일 때만 '안 갔던 곳'(candidate=true) 후보 핀을 지도에 표시
+  // true일 때만 '안 갔던 곳'(미방문, visited=false) 핀을 지도에 표시. 기본값은 true —
+  // 원래 미방문 핀은 항상 표시됐었고(끄고 켤 방법이 없었음) 그 기본 동작을 그대로 유지하면서,
+  // 버튼으로 껐다 켰다만 가능하게 만든 것.
+  var showUnvisited = true;
 
   // ---- 주차 탐색 트립(출발 → 이동/휴식 → 목적지 도착·경유·복귀) ----
   // 트립은 새로운 병렬 로깅 종류가 아니라, 기존 '일반도로' 로깅(log.type==='road')을 그대로 감싸서
@@ -1664,7 +1667,7 @@
     markersById = {};
     spots.forEach(function(spot){
       if (spot.visited && !showVisited) return; // 갔던 곳은 버튼을 켰을 때만 표시
-      if (spot.candidate && !showCandidates) return; // 안 갔던 곳(후보)도 버튼을 켰을 때만 표시
+      if (!spot.visited && !showUnvisited) return; // 안 갔던 곳(미방문)도 버튼을 껐으면 숨김
       var overlay = new kakao.maps.CustomOverlay({
         position: new kakao.maps.LatLng(spot.lat, spot.lng),
         content: makePinHtml(spot),
@@ -3458,11 +3461,11 @@
       if (btnVisited) btnVisited.classList.toggle('active', showVisited);
       renderMarkers();
     },
-    // '안 갔던 곳'(candidate=true) 후보 핀도 평소엔 숨겨두고, 버튼을 눌렀을 때만 지도에 보여줌.
+    // '안 갔던 곳'(미방문) 핀은 기본으로 보이고, 버튼을 누르면 껐다 켰다 할 수 있음.
     toggleCandidatePins: function(){
-      showCandidates = !showCandidates;
+      showUnvisited = !showUnvisited;
       var btnCandidates = document.getElementById('btnCandidates');
-      if (btnCandidates) btnCandidates.classList.toggle('active', showCandidates);
+      if (btnCandidates) btnCandidates.classList.toggle('active', showUnvisited);
       renderMarkers();
     },
     startRename: function(id){
