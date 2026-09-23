@@ -849,7 +849,10 @@
     border: 2px solid #fff;
     box-shadow: 0 1px 3px rgba(0,0,0,0.4);
   }
-  .pin-wrap.done .pin-dot, .pin-wrap.done .pin-badge{ opacity: 0.45; }
+  /* 방문완료(done) 핀을 0.45 투명도로 흐리게 처리했더니 지도를 좀 축소하면 핀이 배경에
+     묻혀서 잘 안 보인다는 요청 — 투명도를 없애서(불투명, opacity:1) 방문완료 핀도 미방문
+     핀만큼 또렷하게 보이도록 한다. */
+  .pin-wrap.done .pin-dot, .pin-wrap.done .pin-badge{ opacity: 1; }
 
   /* 지도 팝업(장소 등록/조회 폼) — 카카오맵 CustomOverlay 위에 직접 그리는 카드 */
   .map-popup-box{
