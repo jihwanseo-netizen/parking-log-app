@@ -1830,8 +1830,8 @@
   function openBulkImportModal(){
     openModal(
       '<h3>장소 목록 가져오기</h3>' +
-      '<p>"구, 건물명, 주소" 형식으로 한 줄에 하나씩 붙여넣으세요. 엑셀에서 복사하면 탭으로 자동 구분돼요. 주소로 위치를 자동으로 찾아 지도에 등록합니다(높이는 미확인으로 등록되고, 나중에 현장에서 채우면 돼요).</p>' +
-      '<textarea id="bulkImportInput" rows="8" placeholder="강남구	케이투코리아 주식회사	서울특별시 강남구 자곡동 648번지"></textarea>' +
+      '<p>한 줄에 하나씩 붙여넣으세요. "건물명, 주소"만 있어도 되고, 앞에 "구" 정보가 더 있어도 돼요("구, 건물명, 주소"). 엑셀에서 복사하면 탭으로 자동 구분돼요. 주소로 위치를 자동으로 찾아 지도에 등록하고, 이미 등록된 것과 겹치는 줄은 자동으로 걸러져요(높이는 미확인으로 등록되고, 나중에 현장에서 채우면 돼요).</p>' +
+      '<textarea id="bulkImportInput" rows="8" placeholder="케이투코리아 주식회사	서울특별시 강남구 자곡동 648번지&#10;강남구	강남 에이스타워	서울특별시 강남구 자곡동 649번지"></textarea>' +
       '<p id="bulkImportProgress" style="display:none;"></p>' +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" id="bulkImportCancelBtn" onclick="AppMap.cancelModal()">취소</button>' +
@@ -3712,10 +3712,24 @@
         showToast('가져올 줄이 없어요. "구, 건물명, 주소" 형식을 확인해주세요.');
         return;
       }
-      // 이름+주소가 완전히 같은 장소는 중복 등록하지 않는다(같은 목록을 실수로 두 번 붙여넣는 경우 대비).
+      // 이름+주소가 같은 장소는 중복 등록하지 않는다 — 이미 등록된 장소와 겹치는 경우뿐 아니라,
+      // 지금 붙여넣은 목록 "안에" 같은 줄이 두 번 이상 들어있는 경우(엑셀 원본 자체에 중복이
+      // 있거나, 같은 목록을 실수로 두 번 이어붙인 경우)도 걸러야 해서 두 단계로 검사한다.
+      // 공백 개수 차이(예: "강남구  자곡동"처럼 띄어쓰기가 하나 더 들어간 경우)만으로 다른
+      // 장소 취급되지 않도록 비교 시에는 연속 공백을 하나로 합쳐서 비교한다.
+      function dedupeKey(name, address){
+        return (name || '').replace(/\s+/g, ' ').trim() + '|' + (address || '').replace(/\s+/g, ' ').trim();
+      }
       var existingKeys = {};
-      spots.forEach(function(s){ existingKeys[(s.name || '') + '|' + (s.address || '')] = true; });
-      var toImport = rows.filter(function(r){ return !existingKeys[r.name + '|' + r.address]; });
+      spots.forEach(function(s){ existingKeys[dedupeKey(s.name, s.address)] = true; });
+      var seenInBatch = {};
+      var toImport = [];
+      rows.forEach(function(r){
+        var key = dedupeKey(r.name, r.address);
+        if (existingKeys[key] || seenInBatch[key]) return;
+        seenInBatch[key] = true;
+        toImport.push(r);
+      });
       var skipped = rows.length - toImport.length;
       if (toImport.length === 0){
         showToast('붙여넣은 ' + rows.length + '개가 전부 이미 등록돼 있어요.');
