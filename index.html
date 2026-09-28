@@ -1206,9 +1206,9 @@
   // 비고: 주차장 로깅(주행하며 스캔) vs 주차 로깅(정차해서 스캔) 구분용. 일반도로는 비워둠.
   var LOG_REMARK = { parking_lot: '주차장 주행 로깅', parking: '주차장 주차 로깅' };
 
-  // ---- 여러 폰 간 로깅 기록 실시간 공유 (Firebase Firestore) ----
-  // 장소 체크리스트(spots)는 기기별 로컬에만 저장되고, 로깅 기록(logs)만 공유된다.
-  // 팀 코드가 입력된 기기끼리만 같은 방(rooms/{teamCode}/logs)을 보고 쓸 수 있다.
+  // ---- 여러 폰 간 로깅 기록/장소 체크리스트 실시간 공유 (Firebase Firestore) ----
+  // 로깅 기록(logs)과 장소 체크리스트(spots) 둘 다 공유된다.
+  // 팀 코드가 입력된 기기끼리만 같은 방(rooms/{teamCode}/logs, rooms/{teamCode}/spots)을 보고 쓸 수 있다.
   var FIREBASE_CONFIG = {
     apiKey: "AIzaSyC-rWdpmlHo23_rmIwklHwDx5tLhYRS1Gs",
     authDomain: "parking-log-sync-rs4.firebaseapp.com",
@@ -1224,7 +1224,19 @@
   var roomRef = null;       // rooms/{teamCode}/logs
   var spotsRoomRef = null;  // rooms/{teamCode}/spots
   var cloudReady = false;
-  try { teamCode = localStorage.getItem(TEAM_CODE_KEY) || null; } catch(e){}
+  // 팀 코드는 대문자로 통일해서 저장/비교한다 — 예전엔 "RS4"와 "rs4"를 서로 다른 방(room)으로
+  // 취급해서, 같은 팀인데 한쪽이 소문자로 입력하면 조용히(에러 없이) 동기화가 안 되는 문제가
+  // 있었다. 실제로 컴퓨터/아이폰 두 기기의 팀 코드 표기가 서로 달라서 동기화가 안 됐던 사례로
+  // 발견됨 — 앞으로는 대소문자를 어떻게 입력해도 항상 같은 방으로 합쳐지게 정규화한다.
+  function normalizeTeamCode(code){
+    return (code || '').trim().toUpperCase();
+  }
+  try {
+    var storedTeamCode = localStorage.getItem(TEAM_CODE_KEY) || null;
+    teamCode = storedTeamCode ? normalizeTeamCode(storedTeamCode) : null;
+    // 정규화된 값으로 다시 저장해둬서, 다음부터는 항상 대문자 형태로 일관되게 남게 한다.
+    if (teamCode && teamCode !== storedTeamCode) localStorage.setItem(TEAM_CODE_KEY, teamCode);
+  } catch(e){}
 
   /* ---------- Modal ---------- */
   function openModal(html){
@@ -1581,8 +1593,8 @@
   function openTeamCodeModal(){
     openModal(
       '<h3>팀 코드 입력</h3>' +
-      '<p>같이 다니는 폰끼리 같은 코드를 입력하면, 로깅 기록과 장소 체크리스트를 서로 실시간으로 보고 이어받을 수 있어요. 안 써도 이 기기 안에서는 그대로 사용 가능해요.<br/>대문자/소문자를 구분해요 — 예를 들어 "RS4"와 "rs4"는 서로 다른 팀으로 취급돼요.</p>' +
-      '<input type="text" id="teamCodeInput" value="' + escapeHtml(teamCode || '') + '" placeholder="예: RS4 또는 rs4" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />' +
+      '<p>같이 다니는 폰끼리 같은 코드를 입력하면, 로깅 기록과 장소 체크리스트를 서로 실시간으로 보고 이어받을 수 있어요. 안 써도 이 기기 안에서는 그대로 사용 가능해요.<br/>대문자/소문자는 구분하지 않아요(자동으로 대문자로 저장돼요) — "RS4"와 "rs4"는 항상 같은 팀으로 합쳐져요.</p>' +
+      '<input type="text" id="teamCodeInput" value="' + escapeHtml(teamCode || '') + '" placeholder="예: RS4" autocapitalize="characters" autocorrect="off" autocomplete="off" spellcheck="false" />' +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" onclick="AppMap.skipTeamCode()">나중에</button>' +
         '<button class="btn-primary" onclick="AppMap.confirmTeamCode()">저장</button>' +
@@ -4139,7 +4151,7 @@
     },
     confirmTeamCode: function(){
       var el = document.getElementById('teamCodeInput');
-      var val = el ? el.value.trim() : '';
+      var val = el ? normalizeTeamCode(el.value) : '';
       try { localStorage.setItem(TEAM_CODE_PROMPTED_KEY, '1'); } catch(e){}
       closeModal();
       if (val){
