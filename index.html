@@ -2098,6 +2098,7 @@
   }
   function startTrip(opts){
     opts = opts || {};
+    wakeLockWarnedThisTrip = false; // 새 트립마다 Wake Lock 실패 안내를 다시 띄울 수 있게 초기화
     if (opts.ssd){ try { localStorage.setItem('lastSSD', opts.ssd); } catch(e){} }
     if (opts.driver){ try { localStorage.setItem('lastDriver', opts.driver); } catch(e){} }
     // 트립을 시작해도 곧바로 주행 기록(GPS 추적)이 시작되지 않고, "주행 기록 시작"을 직접 눌러야
@@ -2385,12 +2386,34 @@
   }
   // Wake Lock: 화면이 꺼지지 않게만 해줌 — 폰을 잠그거나 다른 앱으로 전환하면 iOS/안드로이드 모두
   // 이 웹앱의 백그라운드 실행 자체를 막기 때문에, "화면을 켜둔 채로 운행"하는 경우에만 유효하다.
+  // 특히 "홈 화면에 추가"해서 앱처럼 쓰는 경우(iOS PWA)는 백그라운드 실행 자체가 허용되지 않아서,
+  // 화면이 꺼지거나 다른 앱(예: 내비게이션 앱)으로 전환되는 순간 이 페이지의 자바스크립트가 통째로
+  // 멈춘다 — GPS 기록도, 화면에 보이는 타이머도 그 순간부터 그대로 멈춰버린 것처럼 보인다(실제로
+  // 코드가 죽거나 버그가 난 게 아니라 iOS가 웹앱의 백그라운드 실행 자체를 막는 것이라, 웹앱만으로는
+  // 완전히 막을 방법이 없다 — 화면이 꺼지지 않게 하는 것만이 유일한 예방책이라 Wake Lock을 쓴다).
+  // 그래서 Wake Lock을 아예 못 걸었을 때(구형 iOS라 API 자체가 없거나, 저전력 모드 등으로 거부된
+  // 경우)는 조용히 무시하지 않고, 트립 중이면 한 번은 꼭 알려줘서 "설정 > 화면 자동 잠금"을 길게
+  // 늘리거나 꺼두도록 유도한다 — 이게 사실상 유일하게 실질적인 예방책이다.
+  var wakeLockWarnedThisTrip = false;
   function requestWakeLock(){
-    if (!('wakeLock' in navigator)) return;
+    if (!('wakeLock' in navigator)){
+      warnNoWakeLockIfTripActive();
+      return;
+    }
     navigator.wakeLock.request('screen').then(function(lock){
       wakeLock = lock;
       lock.addEventListener('release', function(){ wakeLock = null; });
-    }).catch(function(){ /* 권한 거부/미지원 — 조용히 무시, GPS 추적 자체는 계속 시도됨 */ });
+    }).catch(function(){
+      // 권한 거부/저전력 모드 등으로 실패 — GPS 추적 자체는 계속 시도되지만, 화면이 꺼지면
+      // 결국 기록이 끊기므로 트립 중이면 알려준다.
+      warnNoWakeLockIfTripActive();
+    });
+  }
+  function warnNoWakeLockIfTripActive(){
+    if (wakeLockWarnedThisTrip) return;
+    if (!activeTripLog()) return;
+    wakeLockWarnedThisTrip = true;
+    showToast('화면 자동 꺼짐 방지를 켤 수 없어요. 기록 중 화면이 꺼지면 위치 기록이 멈출 수 있으니, 설정에서 화면 자동 잠금을 꺼두는 걸 추천해요.', 5000);
   }
   function releaseWakeLock(){
     if (wakeLock){ wakeLock.release().catch(function(){}); wakeLock = null; }
@@ -2399,6 +2422,25 @@
   // 트립이 진행 중일 때 화면이 다시 보이면 다시 요청한다.
   document.addEventListener('visibilitychange', function(){
     if (document.visibilityState === 'visible' && activeTripLog()) requestWakeLock();
+  });
+  // 화면이 꺼져 있거나 다른 앱으로 전환돼 있는 동안엔 (위 설명대로) 자바스크립트 실행 자체가
+  // 멈췄다가 돌아오므로, 그 사이 시간만큼 타이머와 GPS 기록에 공백이 생긴다. 이 공백 자체를
+  // 없앨 수는 없지만(iOS 플랫폼 제약), 적어도 "왜 숫자가 멈춰 있었는지" 사용자가 알 수 있게
+  // 알려주고, 화면으로 돌아오는 즉시 화면 숫자는 바로 최신 상태로 다시 그려준다.
+  var lastHiddenAt = null;
+  var BACKGROUND_GAP_WARN_MS = 8000; // 이보다 짧으면 그냥 화면 잠깐 확인한 정도라 알림 생략
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden){ lastHiddenAt = Date.now(); return; }
+    var gapMs = lastHiddenAt ? (Date.now() - lastHiddenAt) : 0;
+    lastHiddenAt = null;
+    if (activeRoadId || activeLotId || activeParkingId || activeSceneId){
+      renderLogPanel();
+      var liveTrip = activeTripLog();
+      if (liveTrip){ updateTripLegTimer(liveTrip); updateTripRestTimer(liveTrip); updateTripLotTimer(liveTrip); }
+      if (gapMs > BACKGROUND_GAP_WARN_MS){
+        showToast('화면이 꺼져 있던 동안(' + formatDuration(gapMs) + ') 위치 기록이 되지 않았을 수 있어요.', 4000);
+      }
+    }
   });
   function openTripStartModal(){
     tripModalVehicle = 'LX2';
@@ -2454,6 +2496,45 @@
   function pointTime(p){
     var t = Array.isArray(p) ? p[2] : p.t;
     return t || null;
+  }
+  // GPS 튐(엉뚱한 위치로 순간 이동했다가 돌아오는 현상) 필터링.
+  // 지하주차장 진입/고층건물 밀집지역 등에서 위성 신호를 놓치면 스마트폰이 정확도가 아주 낮은
+  // (수백m~수km 오차) 위치를 한 번씩 잘못 찍어서 넘겨주는 경우가 있는데, 이걸 그대로 경로에
+  // 넣으면 앞뒤 진짜 위치와 직선으로 이어지면서 지도에 별 모양처럼 길게 튀는 선이 생긴다
+  // (실제로 사용자가 캡처해서 보내준 화면에 이 패턴이 나타남). 두 가지 기준으로 걸러낸다:
+  // 1) accuracy(오차 반경)가 너무 크면 애초에 못 믿을 좌표라 무시.
+  // 2) 직전 좌표와 비교했을 때 그 사이 시간으로 나눈 속력이 차량으로 불가능한 수준이면 무시
+  //    (시간까지 같이 나누기 때문에, 신호가 오래 끊겼다 정상적으로 멀리 이동한 경우는 걸러지지
+  //    않는다 — 그건 ROAD_GAP_MS가 선을 끊어서 처리).
+  var MAX_GPS_ACCURACY_M = 150;      // 이보다 오차 반경이 크면 좌표 자체를 신뢰하지 않음
+  // 시속 220km까지도 실제로 주행하는 경우가 있다고 해서(테스트 트랙 등), 그보다 한참 위(시속
+  // 300km)로 여유 있게 잡는다 — 실제 GPS 튐은 몇 초 사이에 수백m~수km씩 튀어서 시속 수천km에
+  // 해당하므로, 300km/h 기준으로도 정상 주행과는 확실히 구분된다.
+  var MAX_PLAUSIBLE_SPEED_KMH = 300;
+  var MAX_PLAUSIBLE_SPEED_MPS = MAX_PLAUSIBLE_SPEED_KMH / 3.6;
+  function haversineMeters(lat1, lng1, lat2, lng2){
+    var R = 6371000;
+    var dLat = (lat2 - lat1) * Math.PI / 180;
+    var dLng = (lng2 - lng1) * Math.PI / 180;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+  function isGoodGpsFix(pos, log){
+    var acc = pos && pos.coords ? pos.coords.accuracy : null;
+    if (acc != null && acc > MAX_GPS_ACCURACY_M) return false;
+    var path = log && log.path;
+    if (path && path.length){
+      var last = path[path.length - 1];
+      var lastT = pointTime(last);
+      var dtSec = lastT ? (Date.now() - lastT) / 1000 : 0;
+      if (dtSec > 0){
+        var dist = haversineMeters(last[0], last[1], pos.coords.latitude, pos.coords.longitude);
+        if ((dist / dtSec) > MAX_PLAUSIBLE_SPEED_MPS) return false;
+      }
+    }
+    return true;
   }
   // 화면이 꺼지거나 앱이 백그라운드로 가면 브라우저가 위치 업데이트를 몇 초~몇 분씩 멈춰버린다.
   // 다시 돌아왔을 때 그 사이 건너뛴 두 점을 직선으로 이어버리면 지도 위에서 길을 무시하고
@@ -2576,6 +2657,7 @@
       lastFixAt = Date.now();
       var log = logs.find(function(l){ return l.id === activeRoadId; });
       if (!log) return;
+      if (!isGoodGpsFix(pos, log)) return; // GPS 튐(오차 큰 좌표/비정상 속력) — 이번 좌표는 버림
       var latlng = [pos.coords.latitude, pos.coords.longitude, Date.now()];
       log.path.push(latlng);
       appendRoadPoint(log.id, log.path);
@@ -2648,6 +2730,9 @@
       lastFixAt = Date.now();
       var log = logs.find(function(l){ return l.id === activeRoadId; });
       if (!log) return;
+      // 화면을 껐다 켠 직후엔 GPS가 아직 "콜드 픽스" 상태라 오차가 큰 좌표를 줄 때가 많아서,
+      // 여기서도 똑같이 걸러준다(안 그러면 복귀 직후에 튀는 선이 자주 생김).
+      if (!isGoodGpsFix(pos, log)) return;
       var latlng = [pos.coords.latitude, pos.coords.longitude, Date.now()];
       log.path.push(latlng);
       appendRoadPoint(log.id, log.path);
