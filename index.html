@@ -3138,7 +3138,6 @@
     }
     return log.legs[log.legs.length - 1];
   }
-  var SEGMENT_MERGE_GAP_MS = 30 * 60 * 1000; // 같은 목적지로 가는 주행 구간이라도 30분 이상 비면 다른 줄로 나눔
   var SEGMENT_MIN_DURATION_MS = 60 * 1000;   // 1분이 안 되는 구간은 리포트에서 뺌(끊어 찍은 잡음성 구간)
   // 도로 환경(고속도로/일반도로)은 이제 트립 시작할 때 고른 고정값이 아니라, 그 구간에서 실제로
   // 인식된 도로명에 "고속도로"가 들어있는지로 구간별로 판단한다. 인식된 도로명이 아예 없을 때만
@@ -3167,9 +3166,9 @@
         var wholeHighwayCol = isRoad ? wholeRoadNames : (l.manualAddress || l.address || '');
         pending.push({ start: l.startTime, args: [l, l.startTime, l.endTime, isRoad, wholeEnv, wholeHighwayCol, null, undefined] });
       } else {
-        // 트립 안에서 "주행 기록 시작~정지"를 여러 번 오간 경우 — 같은 목적지로 가는 도중 잠깐씩
-        // 끊었다 이어간 구간들은 한 줄로 묶고(처음 시작~마지막 종료 시각), 목적지가 바뀌었거나
-        // 30분 이상 비어 있으면 새 줄로 나눈다. 1분이 안 되는 짧은 구간은 아예 제외한다.
+        // 트립 안에서 "주행 기록 시작~정지"를 여러 번 오간 경우, 실제로 껐다 켠 구간 하나하나를
+        // 각각 별도 줄로 낸다(뭉뚱그리지 않음) — 앱 안의 주행 상세 기록과 동일하게, 실제로 주행한
+        // 시간만큼만 "취득 시간"에 반영되도록. 1분이 안 되는 짧은 구간은 아예 제외한다.
         var resolvedSegs = driveSegs.map(function(seg){
           return { start: seg.start, end: (seg.end === null || seg.end === undefined) ? l.endTime : seg.end };
         }).filter(function(seg){ return (seg.end - seg.start) >= SEGMENT_MIN_DURATION_MS; });
@@ -3180,15 +3179,8 @@
           var fallbackRoadNames = roadNamesForWindow(l, l.startTime, l.endTime);
           pending.push({ start: l.startTime, args: [l, l.startTime, l.endTime, isRoad, envForRoadNames(l, fallbackRoadNames), fallbackRoadNames, null, undefined] });
         } else {
-          var groups = [];
-          resolvedSegs.forEach(function(seg){
-            var leg = legForTimestamp(l, seg.start);
-            var lastGroup = groups.length ? groups[groups.length - 1] : null;
-            if (lastGroup && lastGroup.leg === leg && (seg.start - lastGroup.end) < SEGMENT_MERGE_GAP_MS){
-              lastGroup.end = seg.end; // 이전 구간과 이어붙임(마지막 종료 시각만 갱신)
-            } else {
-              groups.push({ leg: leg, start: seg.start, end: seg.end });
-            }
+          var groups = resolvedSegs.map(function(seg){
+            return { leg: legForTimestamp(l, seg.start), start: seg.start, end: seg.end };
           });
 
           groups.forEach(function(g){
