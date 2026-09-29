@@ -341,8 +341,8 @@
     font-variant-numeric: tabular-nums;
     color: var(--ink);
     font-weight: 800;
-    font-size: 17px;
-    padding: 3px 11px;
+    font-size: 23px;
+    padding: 4px 14px;
     border-radius: 999px;
     background: var(--asphalt-2);
     border: 1px solid var(--line);
@@ -2962,7 +2962,24 @@
     // (기록을 시작하기도 전인 대기 상태에서부터 시간이 흘러가면 헷갈린다는 피드백으로 수정).
     // 트립이 아닌 일반도로/주차장/주차 로깅은 켜져 있는 동안 계속 흐르는 게 맞으므로 그대로 둔다.
     var isTrip = !!(log.legs && log.legs.length);
-    var elapsed = isTrip ? currentDriveSegmentMs(log) : (Date.now() - log.startTime);
+    // "주행 기록 정지"를 누르면 방금 끝난 구간의 시간이 그대로 남아있지 말고 0부터 다시
+    // 시작해야 한다(정지 후에도 예전 구간 시간이 멈춘 채 계속 보이면 헷갈린다는 피드백).
+    // 다만 도착한 목적지에서 "주차장 기록"/"주차 기록"을 켜둔 동안에는(trip.mode는 여전히
+    // 'stopped'로 남아있지만 leg.lotMode로 표시됨) 그 구간 시간이 계속 흘러야 한다 — 이걸
+    // 놓치면 주행 기록만 흐르고 주차장/주차 기록은 0에 멈춰있는 것처럼 보이는 버그가 생긴다.
+    var elapsed;
+    if (isTrip){
+      var curLegForTimer = currentLeg(log);
+      if (curLegForTimer && curLegForTimer.arrived && curLegForTimer.lotMode){
+        var lotSegsForTimer = curLegForTimer.lotMode === 'lot' ? curLegForTimer.lotSegments : curLegForTimer.parkSegments;
+        var openLotSeg = (lotSegsForTimer && lotSegsForTimer.length) ? lotSegsForTimer[lotSegsForTimer.length - 1] : null;
+        elapsed = (openLotSeg && (openLotSeg.end === null || openLotSeg.end === undefined)) ? (Date.now() - openLotSeg.start) : 0;
+      } else {
+        elapsed = log.mode === 'drive' ? currentDriveSegmentMs(log) : 0;
+      }
+    } else {
+      elapsed = Date.now() - log.startTime;
+    }
     timer.textContent = formatDuration(elapsed);
   }
   // 4분 안에 끊었다가 다시 시작해야 하는 "리스타트 제한" 대상의 지금 경과 시간을 하나로
