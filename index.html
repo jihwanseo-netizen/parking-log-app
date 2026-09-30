@@ -3383,7 +3383,7 @@
     '</div>';
   }
   function renderLogRow(l){
-    var meta = LOG_META[l.type];
+    var meta = LOG_META[l.type] || { label: (l.type || DEFAULT_LABEL.road || '기록'), color: '#999999' };
     var live = !l.endTime;
     var endText = live ? '진행 중' : formatTimeHMS(l.endTime);
     var durMs = (live ? Date.now() : l.endTime) - l.startTime;
@@ -3614,9 +3614,15 @@
 
     list.innerHTML = toggleHtml + groups.map(function(g){
       var rowsHtml = g.items.map(function(it){
-        if (it.kind === 'event') return renderEventRow(it.event);
-        if (it.kind === 'trip') return renderTripCard(it.log);
-        return renderLogRow(it.log);
+        try {
+          if (it.kind === 'event') return renderEventRow(it.event);
+          if (it.kind === 'trip') return renderTripCard(it.log);
+          return renderLogRow(it.log);
+        } catch (renderErr) {
+          // 손상되거나 예상치 못한 형태의 기록 하나 때문에 전체 목록 렌더링이
+          // 통째로 멈추면 안 되므로, 그 항목만 건너뛰고 나머지는 정상 표시한다.
+          return '';
+        }
       }).join('');
       return renderDateHeaderCard(g.key, g.dateMs, g.logs) + rowsHtml;
     }).join('');
