@@ -1138,6 +1138,10 @@
   var LOG_STORAGE_KEY = 'logging-sessions';
   var spots = [];
   var logs = [];
+  // 저장된 로깅 기록(loadLogs)을 실제로 다 불러오기 전까진 false. 화면 버튼들은 HTML이라
+  // 스크립트가 데이터를 다 불러오기 전부터 이미 눌려 있을 수 있어서(특히 페이지가 방금
+  // 다시 로드된 직후), 이 값을 확인하지 않으면 있는 기록도 "없다"고 잘못 뜰 수 있다.
+  var dataReady = false;
   var map, markersById = {};
   var currentFilter = 'all';
   var searchTerm = '';
@@ -3260,6 +3264,12 @@
   // dateKey는 dateKeyOf()가 주는 'YYYY-MM-DD' 형식. "오늘 로깅 종료" 버튼(오늘 날짜)과
   // 로깅 기록 탭의 날짜별 카드 "보기" 버튼(과거 아무 날짜나)이 둘 다 이 함수 하나를 같이 쓴다.
   function shareOrDownloadReportForDate(dateKey){
+    // openDayEndKmModal과 같은 이유: 페이지가 막 (재)로드된 직후라 저장된 기록을 아직 못
+    // 불러왔으면, 실제로는 기록이 있어도 "없다"고 잘못 뜰 수 있어서 먼저 걸러준다.
+    if (!dataReady){
+      showToast('데이터를 아직 불러오는 중이에요. 잠시 후 다시 눌러주세요.');
+      return;
+    }
     var dayLogs = logs.filter(function(l){ return l.endTime && dateKeyOf(l.startTime) === dateKey; })
       .sort(function(a,b){ return a.startTime - b.startTime; });
     if (dayLogs.length === 0){
@@ -4035,6 +4045,14 @@
     // 끝낸 시점에 바로 적는 게 가장 자연스러워서 여기서도 입력받는다. 급하면 건너뛰고 리포트만
     // 먼저 보낼 수 있게 "입력 없이 보내기"도 남겨둔다.
     openDayEndKmModal: function(){
+      // 화면이 하얗게 됐다 돌아오는 것처럼 페이지가 다시 로드된 직후엔, 화면(버튼)은 이미
+      // 떠 있어도 저장된 기록을 불러오는 게(loadLogs) 아직 안 끝났을 수 있다. 그 틈에 이 버튼을
+      // 누르면 실제로는 기록이 있는데도 logs가 아직 빈 배열이라 "기록이 없어요"라고 잘못 뜬다.
+      // 그래서 로딩이 안 끝났으면 그 사실을 정확히 알려주고, 진짜 "없음" 판정은 미룬다.
+      if (!dataReady){
+        showToast('데이터를 아직 불러오는 중이에요. 잠시 후 다시 눌러주세요.');
+        return;
+      }
       if (activeRoadId || activeLotId || activeParkingId){
         showToast('아직 진행 중인 로깅이 있어요. 먼저 종료해주세요.');
         return;
@@ -4608,6 +4626,7 @@
     setMobileView(mobileView);
     await loadSpots();
     await loadLogs();
+    dataReady = true;
     renderAll();
     drawSavedPaths();
     if (activeRoadId) startRoadTracking();
