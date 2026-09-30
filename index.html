@@ -1425,12 +1425,29 @@
   }
 
   /* ---------- 여러 폰 간 로깅 기록 실시간 공유 ---------- */
+  var firebaseAppInitialized = false;
+  var unsubscribeCloudLogs = null;
+  var unsubscribeCloudSpots = null;
+  // "팀 코드" 화면을 열어서 코드를 다시 확인/저장할 때마다(코드가 안 바뀌었어도) 이 함수가
+  // 다시 호출된다. 그런데 firebase.initializeApp()은 같은 앱을 두 번 초기화하면 예외를 던지고,
+  // 그 예외를 여기 catch가 조용히 삼켜서 cloudReady = false가 되어버린다 — 화면엔 아무 에러도
+  // 안 뜨는데 그 뒤로 이 기기에서 만든 기록이 클라우드로 전혀 안 올라가는 버그(반대로 받는 건
+  // 기존 리스너가 살아있어서 될 수도 있어 "한쪽만 이상함"처럼 보임). 그래서 initializeApp은
+  // 딱 한 번만 부르고, 다시 호출될 땐 리스너만 정리하고 새로 구독한다(같은 코드든 바뀐 코드든
+  // 안전하게 다시 연결되도록).
   function initCloudSync(){
     if (!teamCode || typeof firebase === 'undefined') return;
     try{
-      firebase.initializeApp(FIREBASE_CONFIG);
+      if (!firebaseAppInitialized){
+        firebase.initializeApp(FIREBASE_CONFIG);
+        firebaseAppInitialized = true;
+      }
       db = firebase.firestore();
-      try { db.enablePersistence({ synchronizeTabs: true }).catch(function(){}); } catch(e2){}
+      if (!cloudReady){
+        try { db.enablePersistence({ synchronizeTabs: true }).catch(function(){}); } catch(e2){}
+      }
+      if (unsubscribeCloudLogs){ unsubscribeCloudLogs(); unsubscribeCloudLogs = null; }
+      if (unsubscribeCloudSpots){ unsubscribeCloudSpots(); unsubscribeCloudSpots = null; }
       roomRef = db.collection('rooms').doc(teamCode).collection('logs');
       spotsRoomRef = db.collection('rooms').doc(teamCode).collection('spots');
       cloudReady = true;
@@ -1440,11 +1457,12 @@
       migrateLocalSpotsToCloud();
     }catch(e){
       cloudReady = false;
+      showToast('동기화 연결에 실패했어요. 화면을 새로고침한 뒤 다시 시도해주세요.');
     }
   }
   function subscribeToCloudLogs(){
     if (!roomRef) return;
-    roomRef.onSnapshot(function(snapshot){
+    unsubscribeCloudLogs = roomRef.onSnapshot(function(snapshot){
       snapshot.docChanges().forEach(function(change){
         var id = change.doc.id;
         if (change.type === 'removed'){
@@ -1523,7 +1541,7 @@
   /* ---------- 여러 폰 간 장소 체크리스트 실시간 공유 ---------- */
   function subscribeToCloudSpots(){
     if (!spotsRoomRef) return;
-    spotsRoomRef.onSnapshot(function(snapshot){
+    unsubscribeCloudSpots = spotsRoomRef.onSnapshot(function(snapshot){
       snapshot.docChanges().forEach(function(change){
         var id = change.doc.id;
         if (change.type === 'removed'){
