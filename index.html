@@ -1001,7 +1001,7 @@
       </div>
       <div class="stat-box">
         <div class="stat-num" id="statUnknown">0</div>
-        <div class="stat-label">저장 장소</div>
+        <div class="stat-label">높이 미확인</div>
       </div>
     </div>
     <div id="logPanel">
@@ -1362,11 +1362,21 @@
       spots = [];
     }
   }
+  var storageWarned = false;
+  // 저장 실패(저장 공간 부족/사생활 보호 모드 등)를 조용히 삼키면, 사용자는 기록이 저장되고 있는 줄
+  // 알고 계속 쓰다가 새로고침 한 번에 전부 잃게 된다 — 처음 실패했을 때 한 번은 꼭 알려준다.
+  function warnStorageFailure(){
+    storageReady = false;
+    if (storageWarned) return;
+    storageWarned = true;
+    showToast('이 기기에 저장하지 못했어요. 새로고침하면 기록이 사라질 수 있으니 저장 공간/사생활 보호 모드를 확인해주세요.', 6000);
+  }
   async function saveSpots(){
     try{
       await window.storage.set(STORAGE_KEY, JSON.stringify(spots), false);
+      storageReady = true;
     }catch(e){
-      storageReady = false;
+      warnStorageFailure();
     }
   }
 
@@ -1423,8 +1433,9 @@
   async function saveLogs(){
     try{
       await window.storage.set(LOG_STORAGE_KEY, JSON.stringify(logs), false);
+      storageReady = true;
     }catch(e){
-      storageReady = false;
+      warnStorageFailure();
     }
   }
 
@@ -1477,16 +1488,22 @@
         var data = change.doc.data();
         data.id = id;
         var idx = logs.findIndex(function(l){ return l.id === id; });
+        // 이 기기가 방금 쓴 내용이 그대로 되돌아온 알림(hasPendingWrites)은 무시한다. 이 알림의 문서는
+        // 최대 5초 전에 올린 path 등 "조금 옛날" 상태라서, 그걸로 로컬 기록을 통째로 덮어쓰면
+        // (1) 그 사이 쌓인 GPS 좌표가 사라지고, (2) 진행 중이던 객체 참조가 끊겨 주소 자동채움 같은
+        // 비동기 작업이 엉뚱한 객체에 쓰게 된다. 로컬이 항상 더 최신이므로 건너뛴다.
+        if (idx >= 0 && change.doc.metadata && change.doc.metadata.hasPendingWrites) return;
         if (idx >= 0) logs[idx] = data; else logs.push(data);
       });
       recomputeActiveIds();
       // 다른 기기에서 시작된 일반도로 로깅이면 이 기기도 자기 위치를 추적해서 같이 경로를 채워줌.
-      // 반대로 다른 기기가 이미 종료했으면 이 기기의 추적도 같이 멈춤.
-      if (activeRoadId && watchId === null) startRoadTracking();
-      if (!activeRoadId && watchId !== null) stopRoadTracking();
+      // 반대로 다른 기기가 이미 종료했으면 이 기기의 추적도 같이 멈춤. 단, 트립은 "주행 기록" 중일
+      // 때만 추적한다 — 정지/휴식 중에 이 알림이 와서 추적을 되살리면 정지/휴식이 풀려버린다.
+      if (shouldTrackActiveRoad() && watchId === null) startRoadTracking();
+      if (!shouldTrackActiveRoad() && watchId !== null) stopRoadTracking();
       try { drawSavedPaths(); } catch(e){}
       renderLogPanel();
-      renderLogList();
+      renderLogListPassive();
     }, function(err){
       showToast('동기화 연결에 문제가 있어요. 팀 코드를 확인해주세요.');
     });
@@ -1712,7 +1729,7 @@
       '<label>장소 이름</label>' +
       '<input type="text" id="pf-name" value="' + escapeHtml(name) + '" placeholder="예: OO빌딩 지하주차장" />' +
       '<label>높이 제한 (m)</label>' +
-      '<input type="number" step="0.1" id="pf-height" value="' + height + '" placeholder="예: 2.3" />' +
+      '<input type="number" step="0.1" id="pf-height" value="' + height + '" placeholder="예: 2.3"' + (unknownChecked ? ' disabled' : '') + ' />' +
       '<div class="popup-checkline">' +
         '<input type="checkbox" id="pf-unknown" ' + unknownChecked + ' onchange="document.getElementById(\'pf-height\').disabled=this.checked" />' +
         '<label for="pf-unknown">높이 미확인</label>' +
@@ -1879,6 +1896,8 @@
     autoCaptureAddress(
       function(){ return !log.endTime && !log.manualAddress && !log.address; },
       function(addr, lat, lng){
+        // 동기화로 log 객체가 새 객체로 바뀌었을 수 있으니 id로 지금 것을 다시 찾아서 채운다.
+        log = logs.find(function(l){ return l.id === log.id; }) || log;
         log.startLat = lat; log.startLng = lng; log.address = addr;
         saveLogs();
         pushLogStateToCloud(log);
@@ -2125,6 +2144,9 @@
     if (!isAnyLoggingActive()) releaseWakeLock();
     saveLogs();
     pushLogStateToCloud(log);
+    // pushLogStateToCloud는 용량 때문에 path를 빼고 올리므로, 종료 직전 마지막 몇 초치 경로가 다른
+    // 기기에 안 가는 일이 없도록 일반도로 로깅은 path까지 한 번 더 올린다.
+    if (log && type === 'road' && log.path && log.path.length) pushLogToCloud(log);
     renderLogPanel();
     renderLogList();
   }
@@ -2292,7 +2314,10 @@
     autoCaptureAddress(
       function(){ return !log.endTime && !leg.endTime && !leg.address; },
       function(addr){
-        leg.address = addr;
+        var curLog = logs.find(function(l){ return l.id === log.id; }) || log;
+        var curLeg = (curLog.legs || []).find(function(lg){ return lg.id === leg.id; }) || leg;
+        curLeg.address = addr;
+        log = curLog;
         saveLogs();
         pushLogStateToCloud(log);
         if (activeTab === 'logs') renderLogList();
@@ -2466,14 +2491,18 @@
     return !!(activeRoadId || activeLotId || activeParkingId);
   }
   function requestWakeLock(){
+    // 이미 유효한 락을 쥐고 있으면 또 요청하지 않는다 — 로깅 시작/화면 복귀/락 해제 콜백이 각각 요청해서
+    // 락이 여러 개 쌓이면, 마지막 하나만 해제되고 나머지가 남아 로깅이 끝난 뒤에도 화면이 안 꺼진다.
+    if (wakeLock && !wakeLock.released) return;
     if (!('wakeLock' in navigator)){
       warnNoWakeLockIfLoggingActive();
       return;
     }
     navigator.wakeLock.request('screen').then(function(lock){
+      if (wakeLock && !wakeLock.released){ lock.release().catch(function(){}); return; } // 그 사이 다른 요청이 먼저 성공함
       wakeLock = lock;
       lock.addEventListener('release', function(){
-        wakeLock = null;
+        if (wakeLock === lock) wakeLock = null;
         // 화면이 꺼져서 풀린 게 아니라(그런 경우는 visibilitychange가 다시 요청함), 화면이 켜진
         // 채로 브라우저가 자체적으로 풀어버리는 경우도 있어서, 로깅이 아직 진행 중이면 바로 다시
         // 시도해본다 — 안 되면 그때 경고를 띄운다.
@@ -2606,7 +2635,11 @@
       var lastT = pointTime(last);
       var dtSec = lastT ? (Date.now() - lastT) / 1000 : 0;
       if (dtSec > 0){
-        var dist = haversineMeters(last[0], last[1], pos.coords.latitude, pos.coords.longitude);
+        // 클라우드에서 내려받은 경로는 {lat,lng,t} 객체라 last[0]/last[1]이 undefined(NaN 거리)가 되어
+        // 속도 필터가 조용히 꺼져버렸다 — 배열/객체 둘 다 읽는다.
+        var lastLat = Array.isArray(last) ? last[0] : last.lat;
+        var lastLng = Array.isArray(last) ? last[1] : last.lng;
+        var dist = haversineMeters(lastLat, lastLng, pos.coords.latitude, pos.coords.longitude);
         if ((dist / dtSec) > MAX_PLAUSIBLE_SPEED_MPS) return false;
       }
     }
@@ -2719,12 +2752,25 @@
     el.style.display = 'block';
     el.textContent = msg;
   }
+  // 지금 이 기기가 GPS 경로를 기록해야 하는 상태인지. 일반 주행 로깅은 켜져 있는 동안 계속,
+  // 트립(주차 탐색)은 "주행 기록"(mode==='drive')일 때만 — 대기/정지/휴식 중엔 기록하지 않는다.
+  function shouldTrackActiveRoad(){
+    if (!activeRoadId) return false;
+    var log = logs.find(function(l){ return l.id === activeRoadId; });
+    if (!log) return false;
+    if (log.legs && log.legs.length) return log.mode === 'drive';
+    return true;
+  }
   function startRoadTracking(){
-    if (!map) return;
+    // 지도(카카오 SDK)를 못 불러온 경우에도 GPS 경로 기록 자체는 되어야 한다 — 지도가 필요한 부분
+    // (실시간 점/폴리라인)만 아래에서 map이 있을 때만 처리한다.
     if (!navigator.geolocation){
       setGeoStatus('이 브라우저에서는 위치 추적을 지원하지 않아요.');
       return;
     }
+    // 이미 돌고 있는 watch가 있으면 먼저 치운다 — 안 그러면 watch가 겹쳐서 같은 좌표가 중복 기록되고,
+    // 나중에 stopRoadTracking이 마지막 하나만 끄기 때문에 "정지했는데 계속 기록되는" 상태가 된다.
+    if (watchId !== null){ try { navigator.geolocation.clearWatch(watchId); } catch(e){} watchId = null; }
     setGeoStatus('위치 권한을 확인하는 중…');
     lastFixAt = Date.now();
     startGeoWatchdog();
@@ -2738,6 +2784,7 @@
       log.path.push(latlng);
       appendRoadPoint(log.id, log.path);
       maybeSampleHighwayRoad(log);
+      if (map){
       var kakaoLatLng = toKakaoLatLng(latlng);
       if (!liveMarker){
         liveMarker = new kakao.maps.CustomOverlay({
@@ -2753,6 +2800,7 @@
       } else {
         liveMarker.setPosition(kakaoLatLng);
         if (followMode) map.setCenter(kakaoLatLng);
+      }
       }
       saveLogs();
       // 경로는 GPS 신호 올 때마다(약 2초) 갱신되지만, 클라우드 전송은 5초에 한 번으로 묶어서
@@ -2940,7 +2988,7 @@
           updateRestartUrgencyUI();
           var liveTrip = activeTripLog();
           if (liveTrip){ updateTripLegTimer(liveTrip); updateTripRestTimer(liveTrip); updateTripLotTimer(liveTrip); }
-          if (activeTab === 'logs') renderLogList();
+          renderLogListPassive();
         }, 1000);
       }
     } else {
@@ -3565,6 +3613,22 @@
       legsHtml +
     '</div>';
   }
+  // 1초 타이머/클라우드 동기화처럼 사용자가 시키지 않았는데 목록을 통째로 다시 그리는 경우용.
+  // 목록 innerHTML을 갈아엎으면 (a) 이름/시간 수정 입력칸이 매초 비워지고 전체 선택돼서 타이핑이 불가능하고,
+  // (b) 손가락이 버튼 위에 있는 사이(누름~뗌) 버튼이 새로 만들어져 탭이 씹힌다. 그래서 수정 중이거나
+  // 화면을 누르고 있는 동안에는 건너뛴다(다음 주기에 반영).
+  var pointerIsDown = false;
+  ['pointerdown','touchstart','mousedown'].forEach(function(ev){
+    document.addEventListener(ev, function(){ pointerIsDown = true; }, true);
+  });
+  ['pointerup','pointercancel','touchend','touchcancel','mouseup'].forEach(function(ev){
+    document.addEventListener(ev, function(){ setTimeout(function(){ pointerIsDown = false; }, 60); }, true);
+  });
+  function renderLogListPassive(){
+    if (activeTab !== 'logs') return;
+    if (renamingId || pointerIsDown) return;
+    renderLogList();
+  }
   function renderLogList(){
     var list = document.getElementById('list');
     var now = Date.now();
@@ -3696,6 +3760,7 @@
       saveLogs();
       deleteLogFromCloud(id);
       recomputeActiveIds();
+      if (!isAnyLoggingActive()) releaseWakeLock();
       renderLogPanel();
       renderLogList();
     },
@@ -3707,10 +3772,27 @@
       if (!log || log.endTime) return;
       var wasActiveRoad = (activeRoadId === id);
       log.endTime = Date.now();
+      // 열린 채로 남은 주행/휴식/주차장/주차 구간과 목적지를 같이 닫는다 — 안 닫으면 지난 기록 화면에서
+      // 그 구간이 "진행 중"으로 남아 소요 시간이 계속 늘어난다.
+      [log.driveSegments, log.restSegments].forEach(function(segs){
+        (segs || []).forEach(function(seg){ if (seg.end === null || seg.end === undefined) seg.end = log.endTime; });
+      });
+      (log.legs || []).forEach(function(lg){
+        [lg.lotSegments, lg.parkSegments].forEach(function(segs){
+          (segs || []).forEach(function(seg){ if (seg.end === null || seg.end === undefined) seg.end = log.endTime; });
+        });
+        lg.lotMode = null;
+      });
+      if (log.legs && log.legs.length){
+        var lastLg = log.legs[log.legs.length - 1];
+        if (lastLg.endTime === null || lastLg.endTime === undefined) lastLg.endTime = log.endTime;
+        tripPanelLegId = null;
+      }
       if (wasActiveRoad) stopRoadTracking();
       saveLogs();
       pushLogStateToCloud(log);
       recomputeActiveIds();
+      if (!isAnyLoggingActive()) releaseWakeLock();
       renderLogPanel();
       renderLogList();
       showToast('강제 종료했어요.', 1200);
@@ -3827,6 +3909,7 @@
       var start = startEl ? fromLocalInputValue(startEl.value) : null;
       var end = (endEl && endEl.value) ? fromLocalInputValue(endEl.value) : null;
       if (!start){ showToast('시작 시각을 입력해주세요.'); return; }
+      if (end !== null && end <= start){ showToast('종료 시각이 시작 시각보다 늦어야 해요.'); return; }
       var seg = { start: start, end: end };
       var arr = resolveRecordArray(log, addRecordTypeChoice, legId);
       if (!arr) return;
@@ -3922,6 +4005,8 @@
         var endEl = document.getElementById('editRecEnd');
         var newStart = startEl ? fromLocalInputValue(startEl.value) : null;
         var newEnd = (endEl && endEl.value) ? fromLocalInputValue(endEl.value) : null;
+        var finalStart = newStart || target.start;
+        if (newEnd !== null && newEnd <= finalStart){ showToast('종료 시각이 시작 시각보다 늦어야 해요.'); return; }
         if (newStart) target.start = newStart;
         target.end = newEnd;
       }
@@ -4417,7 +4502,7 @@
     // (마커/기존 경로/실시간 추적)을 지도가 늦게 준비된 지금 다시 실행해준다.
     renderMarkers();
     drawSavedPaths();
-    if (activeRoadId) startRoadTracking();
+    if (shouldTrackActiveRoad() && watchId === null) startRoadTracking();
   }
 
   function setMobileView(view){
@@ -4635,7 +4720,7 @@
     dataReady = true;
     renderAll();
     drawSavedPaths();
-    if (activeRoadId) startRoadTracking();
+    if (shouldTrackActiveRoad() && watchId === null) startRoadTracking();
     if (isAnyLoggingActive()) requestWakeLock(); // 로깅 도중 새로고침/재접속됐어도 화면-꺼짐 방지를 다시 요청
     // 카카오맵이 아직 준비 전이면(initMap이 재시도하는 중) loading 오버레이는 그대로 두고,
     // 지도가 늦게라도 준비되면 buildMap()이 알아서 가려준다. 지도와 무관하게 로깅/체크리스트는
@@ -4654,7 +4739,7 @@
     // 완료된 로깅이 10시간 경과선을 넘는 순간 목록에서 자동으로 정리되도록 주기적으로 갱신
     // (데이터 삭제 아님 — 화면 표시만 갱신, "지난 기록 보기"로 언제든 다시 볼 수 있음)
     setInterval(function(){
-      if (activeTab === 'logs') renderLogList();
+      renderLogListPassive();
     }, 5 * 60 * 1000);
   })();
 })();
