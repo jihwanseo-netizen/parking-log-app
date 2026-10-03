@@ -1504,6 +1504,7 @@
       migrateLocalLogsToCloud();
       subscribeToCloudSpots();
       migrateLocalSpotsToCloud();
+      startPresence();
     }catch(e){
       cloudReady = false;
       showToast('동기화 연결에 실패했어요. 화면을 새로고침한 뒤 다시 시도해주세요.');
@@ -1670,19 +1671,71 @@
     if (!teamCode) return '팀 코드 없음 (이 기기에만 저장)';
     if (!navigator.onLine) return '🔴 오프라인 — 인터넷이 연결되면 자동으로 동기화돼요';
     var t = lastSyncAt ? ' (마지막 ' + formatTimeHMS(lastSyncAt) + ')' : '';
+    if (presenceRef && presenceOk !== false) t += ' · 접속 중 ' + presenceCount() + '대(이 폰 포함)';
     if (syncState === 'ok') return '🟢 동기화됨' + t;
     if (syncState === 'pending') return '🟡 서버로 올리는 중' + t;
     if (syncState === 'error') return '🔴 동기화 오류 — 팀 코드/네트워크를 확인해주세요' + t;
-    return '🟡 연결 중…';
+    return '🟡 연결 중…' + (presenceRef && presenceOk !== false ? ' · 접속 중 ' + presenceCount() + '대(이 폰 포함)' : '');
   }
   window.addEventListener('online', function(){ if (teamCode) setSyncState(syncState === 'ok' ? 'pending' : syncState); updateSyncStatusButton(); });
   window.addEventListener('offline', function(){ updateSyncStatusButton(); });
+  // ---- 접속 중인 기기 수(프레즌스) ----
+  // 앱이 켜져 있는(화면이 보이는) 폰은 20초마다 rooms/{팀코드}/presence/{기기ID}에 "마지막으로 살아있던
+  // 시각"을 적고, 70초 안에 적힌 기기만 "접속 중"으로 센다. 화면이 꺼지거나 앱을 닫으면 몇십 초 뒤 자동으로 빠진다.
+  // (폰 시계가 크게 어긋나 있으면 부정확할 수 있다. Firestore 규칙이 presence 쓰기를 막아 두었으면 숫자는 표시하지 않는다.)
+  var PRESENCE_BEAT_MS = 20000;
+  var PRESENCE_ALIVE_MS = 70000;
+  var presenceRef = null, unsubscribePresence = null, presenceTimer = null, presenceTick = null;
+  var presenceSeen = {};   // 기기ID -> 마지막 확인 시각
+  var presenceOk = null;   // null=아직 모름, true=정상, false=권한/네트워크 문제로 못 씀
+  function presenceCount(){
+    var now = Date.now(), n = 0;
+    Object.keys(presenceSeen).forEach(function(id){ if (now - presenceSeen[id] < PRESENCE_ALIVE_MS) n++; });
+    if (n === 0 && presenceOk) n = 1; // 최소한 이 폰 자신
+    return n;
+  }
+  function presenceBeat(){
+    if (!presenceRef || document.hidden) return;
+    var now = Date.now();
+    presenceSeen[DEVICE_ID] = now;
+    presenceRef.doc(DEVICE_ID).set({ lastSeen: now }).then(function(){
+      presenceOk = true; updateSyncStatusButton();
+    }).catch(function(){ presenceOk = false; updateSyncStatusButton(); });
+  }
+  function startPresence(){
+    stopPresence();
+    if (!db || !teamCode) return;
+    presenceRef = db.collection('rooms').doc(teamCode).collection('presence');
+    presenceSeen = {};
+    unsubscribePresence = presenceRef.onSnapshot(function(snap){
+      var seen = {};
+      snap.forEach(function(doc){ var d = doc.data(); if (d && d.lastSeen) seen[doc.id] = d.lastSeen; });
+      // 이 기기는 로컬에서 방금 쓴 값을 더 믿는다
+      if (presenceSeen[DEVICE_ID]) seen[DEVICE_ID] = Math.max(seen[DEVICE_ID] || 0, presenceSeen[DEVICE_ID]);
+      presenceSeen = seen;
+      updateSyncStatusButton();
+    }, function(){ presenceOk = false; updateSyncStatusButton(); });
+    presenceBeat();
+    presenceTimer = setInterval(presenceBeat, PRESENCE_BEAT_MS);
+    presenceTick = setInterval(updateSyncStatusButton, 10000); // 오래 안 보인 기기가 숫자에서 빠지도록
+  }
+  function stopPresence(){
+    if (unsubscribePresence){ unsubscribePresence(); unsubscribePresence = null; }
+    if (presenceTimer){ clearInterval(presenceTimer); presenceTimer = null; }
+    if (presenceTick){ clearInterval(presenceTick); presenceTick = null; }
+    presenceRef = null; presenceOk = null;
+  }
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) presenceBeat(); });
+  window.addEventListener('pagehide', function(){
+    try { if (presenceRef) presenceRef.doc(DEVICE_ID).delete(); } catch(e){}
+  });
   function updateSyncStatusButton(){
     var btn = document.getElementById('syncStatusBtn');
     if (!btn) return;
     if (teamCode){
       var dot = !navigator.onLine ? '🔴' : syncState === 'ok' ? '🟢' : syncState === 'error' ? '🔴' : '🟡';
-      btn.textContent = dot + ' ' + teamCode;
+      var cnt = (navigator.onLine && presenceOk !== false && presenceRef) ? (' · ' + presenceCount() + '대') : '';
+      btn.textContent = dot + ' ' + teamCode + cnt;
       btn.classList.add('linked');
     } else {
       btn.textContent = '팀 코드';
