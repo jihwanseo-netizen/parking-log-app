@@ -107,6 +107,8 @@
     white-space: nowrap;
   }
   .sync-status-btn.linked{ border-color: #12A594; color: #12A594; }
+  .header-btns{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
+  .refresh-btn{ font-size: 14px; line-height: 1; padding: 3px 9px; }
   .log-history-toggle{
     display: block;
     width: 100%;
@@ -989,7 +991,10 @@
     <div id="header">
       <div class="header-top-row">
         <h1>주차장 로깅 지도</h1>
-        <button id="syncStatusBtn" class="sync-status-btn" type="button">팀 코드</button>
+        <div class="header-btns">
+          <button id="syncStatusBtn" class="sync-status-btn" type="button">팀 코드</button>
+          <button id="btnHeaderRefresh" class="sync-status-btn refresh-btn" type="button" title="새로고침" aria-label="새로고침" onclick="AppMap.refreshApp()">↻</button>
+        </div>
       </div>
       <p>로깅을 시작하면 이동 경로가 기록되고, 다녀온 곳을 체크할 수 있어요</p>
     </div>
