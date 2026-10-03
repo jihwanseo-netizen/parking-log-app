@@ -1866,6 +1866,34 @@
   var ADDRESS_RETRY_INTERVAL_MS = 15000;
   var ADDRESS_RETRY_MAX_ATTEMPTS = 8;
   function reverseGeocodeLatLng(lat, lng, cb){
+    // 1순위: 카카오 좌표→주소 변환 — "서울특별시 강서구 마곡동로 136"처럼 도로명 주소를 준다
+    // (도로명이 없는 곳은 지번 주소). 지도 SDK(services)가 아직 안 떴거나 실패하면 아래 Nominatim으로 대체.
+    if (typeof kakao !== 'undefined' && kakao.maps && kakao.maps.services && kakao.maps.services.Geocoder){
+      try {
+        if (!geocoderInstance) geocoderInstance = new kakao.maps.services.Geocoder();
+        geocoderInstance.coord2Address(lng, lat, function(result, status){
+          if (status === kakao.maps.services.Status.OK && result && result.length){
+            var r = result[0];
+            var name = '';
+            var ra = r.road_address;
+            if (ra && ra.road_name){
+              // "서울 강서구 마곡중앙로 136 LG아트센터 서울" 형태: 시/도(짧은 이름) 구 도로명 건물번호 [건물명]
+              name = [ra.region_1depth_name, ra.region_2depth_name, ra.road_name,
+                      ra.main_building_no + (ra.sub_building_no ? '-' + ra.sub_building_no : ''),
+                      ra.building_name].filter(function(x){ return x; }).join(' ');
+            } else {
+              name = (ra && ra.address_name) || (r.address && r.address.address_name) || '';
+            }
+            if (name){ cb(name); return; }
+          }
+          reverseGeocodeNominatim(lat, lng, cb);
+        });
+        return;
+      } catch(e){ /* 아래로 폴백 */ }
+    }
+    reverseGeocodeNominatim(lat, lng, cb);
+  }
+  function reverseGeocodeNominatim(lat, lng, cb){
     // 무료 OpenStreetMap Nominatim 역지오코딩 (API 키 불필요).
     var url = 'https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lng + '&zoom=18&addressdetails=0';
     fetch(url, { headers: { 'Accept-Language': 'ko' } })
