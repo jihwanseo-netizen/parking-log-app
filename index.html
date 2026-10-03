@@ -1224,6 +1224,18 @@
     messagingSenderId: "501204751523",
     appId: "1:501204751523:web:b56cf30043b02c9bb85b16"
   };
+  // 이 기기를 구분하는 값. 같은 팀 코드의 폰 여러 대가 같은 주행 로깅을 같이 추적하는데, 시작하지 않은
+  // 폰(follower)이 자기 복사본 전체를 5초마다 클라우드에 올리면, 시작한 폰이 방금 바꾼 상태(정지/휴식/
+  // 주차장 기록 정지, 특이사항 등)를 옛날 값으로 되돌려버린다. 그래서 경로(path) 주기 업로드는
+  // 로깅을 시작한 기기만 한다.
+  var DEVICE_ID = (function(){
+    try {
+      var d = localStorage.getItem('deviceId');
+      if (!d){ d = 'dv_' + Date.now().toString(36) + Math.floor(Math.random()*1e6).toString(36); localStorage.setItem('deviceId', d); }
+      return d;
+    } catch(e){ return 'dv_' + Math.floor(Math.random()*1e9).toString(36); }
+  })();
+  function isOwnLog(log){ return !log.deviceId || log.deviceId === DEVICE_ID; }
   var TEAM_CODE_KEY = 'teamCode';
   var TEAM_CODE_PROMPTED_KEY = 'teamCodePrompted';
   var teamCode = null;
@@ -1257,6 +1269,19 @@
     document.getElementById('modalBox').innerHTML = '';
   }
   var modalOnSave = null;
+  // 삭제 확인창 — ×를 잘못 눌러 기록이 날아가는(팀 코드면 모든 폰에서) 사고를 막는다.
+  var pendingDeleteAction = null;
+  function askDeleteConfirm(message, onYes){
+    pendingDeleteAction = onYes;
+    openModal(
+      '<h3>삭제 확인</h3>' +
+      '<p class="modal-field-label">' + escapeHtml(message) + ' 되돌릴 수 없어요.</p>' +
+      '<div class="popup-actions">' +
+        '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
+        '<button class="btn-danger" onclick="AppMap.confirmDeleteYes()">삭제</button>' +
+      '</div>'
+    );
+  }
   var modalEnvChoice = 'road'; // 로깅 시작 모달에서 고른 환경: 'road'(일반도로) | 'highway'(고속도로)
 
   // 로깅 시작 모달. 이름 입력(주차장)과 환경 선택(일반도로/고속도로 — 일반도로 로깅에만 해당)을
@@ -1469,6 +1494,7 @@
       roomRef = db.collection('rooms').doc(teamCode).collection('logs');
       spotsRoomRef = db.collection('rooms').doc(teamCode).collection('spots');
       cloudReady = true;
+      setSyncState('connecting');
       subscribeToCloudLogs();
       migrateLocalLogsToCloud();
       subscribeToCloudSpots();
@@ -1481,6 +1507,8 @@
   function subscribeToCloudLogs(){
     if (!roomRef) return;
     unsubscribeCloudLogs = roomRef.onSnapshot(function(snapshot){
+      var md = snapshot.metadata || {};
+      setSyncState(md.hasPendingWrites ? 'pending' : (md.fromCache && !navigator.onLine ? 'offline' : 'ok'));
       snapshot.docChanges().forEach(function(change){
         var id = change.doc.id;
         if (change.type === 'removed'){
@@ -1508,6 +1536,7 @@
       renderLogPanel();
       renderLogListPassive();
     }, function(err){
+      setSyncState('error');
       showToast('동기화 연결에 문제가 있어요. 팀 코드를 확인해주세요.');
     });
   }
@@ -1541,7 +1570,9 @@
   }
   function pushLogToCloud(log){
     if (!cloudReady || !roomRef || !log) return;
+    if (!isOwnLog(log)) return; // 다른 기기가 시작한 로깅은 path 전체 업로드를 하지 않는다(위 DEVICE_ID 설명 참고)
     roomRef.doc(log.id).set(toCloudSafeLog(log), { merge: true }).catch(function(){
+      setSyncState('error');
       showToast('동기화 저장에 실패했어요. 팀 코드를 확인해주세요.');
     });
   }
@@ -1554,6 +1585,7 @@
     var payload = toCloudSafeLog(log);
     delete payload.path;
     roomRef.doc(log.id).set(payload, { merge: true }).catch(function(){
+      setSyncState('error');
       showToast('동기화 저장에 실패했어요. 팀 코드를 확인해주세요.');
     });
   }
@@ -1621,11 +1653,31 @@
     spotsRoomRef.doc(id).delete().catch(function(){});
   }
 
+  // 동기화 상태: 'connecting'(연결 중) | 'ok'(최신) | 'pending'(올리는 중) | 'offline'(인터넷 없음) | 'error'(오류)
+  var syncState = 'connecting';
+  var lastSyncAt = null;
+  function setSyncState(state){
+    if (state === 'ok') lastSyncAt = Date.now();
+    syncState = state;
+    updateSyncStatusButton();
+  }
+  function syncStateLabel(){
+    if (!teamCode) return '팀 코드 없음 (이 기기에만 저장)';
+    if (!navigator.onLine) return '🔴 오프라인 — 인터넷이 연결되면 자동으로 동기화돼요';
+    var t = lastSyncAt ? ' (마지막 ' + formatTimeHMS(lastSyncAt) + ')' : '';
+    if (syncState === 'ok') return '🟢 동기화됨' + t;
+    if (syncState === 'pending') return '🟡 서버로 올리는 중' + t;
+    if (syncState === 'error') return '🔴 동기화 오류 — 팀 코드/네트워크를 확인해주세요' + t;
+    return '🟡 연결 중…';
+  }
+  window.addEventListener('online', function(){ if (teamCode) setSyncState(syncState === 'ok' ? 'pending' : syncState); updateSyncStatusButton(); });
+  window.addEventListener('offline', function(){ updateSyncStatusButton(); });
   function updateSyncStatusButton(){
     var btn = document.getElementById('syncStatusBtn');
     if (!btn) return;
     if (teamCode){
-      btn.textContent = '🔗 ' + teamCode;
+      var dot = !navigator.onLine ? '🔴' : syncState === 'ok' ? '🟢' : syncState === 'error' ? '🔴' : '🟡';
+      btn.textContent = dot + ' ' + teamCode;
       btn.classList.add('linked');
     } else {
       btn.textContent = '팀 코드';
@@ -1636,6 +1688,7 @@
     openModal(
       '<h3>팀 코드 입력</h3>' +
       '<p>같이 다니는 폰끼리 같은 코드를 입력하면, 로깅 기록과 장소 체크리스트를 서로 실시간으로 보고 이어받을 수 있어요. 안 써도 이 기기 안에서는 그대로 사용 가능해요.<br/>대문자/소문자는 구분하지 않아요(자동으로 대문자로 저장돼요) — "RS4"와 "rs4"는 항상 같은 팀으로 합쳐져요.</p>' +
+      (teamCode ? '<p class="modal-field-label">상태: ' + escapeHtml(syncStateLabel()) + '</p>' : '') +
       '<input type="text" id="teamCodeInput" value="' + escapeHtml(teamCode || '') + '" placeholder="예: RS4" autocapitalize="characters" autocorrect="off" autocomplete="off" spellcheck="false" />' +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" onclick="AppMap.skipTeamCode()">나중에</button>' +
@@ -1826,6 +1879,7 @@
       label: (label && label.trim()) ? label.trim() : DEFAULT_LABEL[type],
       startTime: Date.now(),
       endTime: null,
+      deviceId: DEVICE_ID,        // 이 로깅을 시작한 기기(경로 업로드 담당)
       ssd: extra.ssd || '',
       driver: extra.driver || '',
       highway: !!extra.highway,   // 일반도로 로깅에서만 의미 있음(환경: 일반도로/고속도로)
@@ -3761,6 +3815,10 @@
       AppMap.openSpotPopup(id);
     },
     deleteSpot: function(id){
+      var sp = spots.find(function(x){ return x.id === id; });
+      askDeleteConfirm('"' + (sp ? sp.name : '이 장소') + '" 장소를 삭제할까요?', function(){ AppMap.doDeleteSpot(id); });
+    },
+    doDeleteSpot: function(id){
       if (currentPopupSpotId === id) closeMapPopup();
       spots = spots.filter(function(s){ return s.id !== id; });
       saveSpots();
@@ -3784,6 +3842,10 @@
       showToast(idsToDelete.length + '개 중복 삭제 완료');
     },
     deleteLog: function(id){
+      var lg = logs.find(function(x){ return x.id === id; });
+      askDeleteConfirm('"' + (lg ? lg.label : '이 기록') + '" 로깅 기록을 삭제할까요? 팀 코드를 쓰는 경우 다른 폰에서도 같이 지워져요.', function(){ AppMap.doDeleteLog(id); });
+    },
+    doDeleteLog: function(id){
       clearRoadPolylines(id);
       var wasActiveRoad = (activeRoadId === id);
       logs = logs.filter(function(l){ return l.id !== id; });
@@ -4063,6 +4125,9 @@
     // 트립에 목적지가 하나만 남아있거나, 아직 진행 중인 트립의 "지금 이동 중인" 목적지는
     // 지우면 상태가 꼬일 수 있어 막는다(완료된 트립이거나, 진행 중이어도 이미 지나간 목적지만 가능).
     deleteLeg: function(logId, legId){
+      askDeleteConfirm('이 목적지와 그 안의 기록을 통째로 삭제할까요?', function(){ AppMap.doDeleteLeg(logId, legId); });
+    },
+    doDeleteLeg: function(logId, legId){
       var log = logs.find(function(l){ return l.id === logId; });
       if (!log || !log.legs || log.legs.length <= 1) return;
       var leg = log.legs.find(function(lg){ return lg.id === legId; });
@@ -4241,7 +4306,14 @@
       if (log) pushLogStateToCloud(log);
       renderLogList();
     },
+    confirmDeleteYes: function(){
+      var fn = pendingDeleteAction;
+      pendingDeleteAction = null;
+      closeModal();
+      if (fn) fn();
+    },
     cancelModal: function(){
+      pendingDeleteAction = null;
       modalOnSave = null;
       closeModal();
     },
@@ -4741,6 +4813,14 @@
       });
     });
   }
+
+  // 오프라인(지하주차장 등)에서도 앱 화면이 열리도록 서비스 워커로 앱 파일을 캐시한다(sw.js 필요).
+  // file:// 이거나 sw.js가 없으면 조용히 무시된다.
+  try {
+    if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
+      navigator.serviceWorker.register('sw.js').catch(function(){});
+    }
+  } catch(e){}
 
   (async function start(){
     initMap();
