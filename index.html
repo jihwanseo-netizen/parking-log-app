@@ -1176,6 +1176,11 @@
   var lastPathPushAt = 0;
   var lastFixAt = 0; // 마지막으로 GPS 좌표를 실제로 받은 시각 — watchPosition이 조용히 죽었는지 감시하는 워치독용
   var geoWatchdogInterval = null;
+  // 위치 권한이 거부된 상태에서는 watchPosition이 또 실패할 게 뻔한데도 워치독이 25초마다
+  // clearWatch+재시작을 계속 반복해서 "위치 권한을 확인하는 중…" ↔ "위치 접근 실패"만 끝없이
+  // 깜빡이는 문제가 있었다. 권한 거부를 감지하면 이 플래그를 세워 워치독의 자동 재시작을 멈추고,
+  // 위치 재요청이 실제로 성공하면(권한을 다시 허용한 경우) 다시 풀어준다.
+  var geoPermissionDenied = false;
   var highwaySampleTimestamps = {}; // logId -> 마지막으로 구간명을 확인한 시각(로컬 전용, 클라우드로 동기화 안 됨)
   var followMode = false; // true면 실시간 위치가 갱신될 때마다 지도를 그 위치로 따라감(일반도로 로깅 중에만 동작)
   var showVisited = false; // true일 때만 '갔던 곳'(visited=true) 핀을 지도에 표시. 평소엔 숨겨서 지도가 복잡해지지 않게 함
@@ -1530,6 +1535,12 @@
         // (1) 그 사이 쌓인 GPS 좌표가 사라지고, (2) 진행 중이던 객체 참조가 끊겨 주소 자동채움 같은
         // 비동기 작업이 엉뚱한 객체에 쓰게 된다. 로컬이 항상 더 최신이므로 건너뛴다.
         if (idx >= 0 && change.doc.metadata && change.doc.metadata.hasPendingWrites) return;
+        // 다른 기기가 한동안 최신 상태를 못 받은 채(화면 꺼짐 등) 옛날 상태를 통째로 다시 올리면,
+        // 이 기기가 이미 보고 있는 더 최신 상태(_rev가 더 큼)가 그 옛날 스냅샷으로 되돌아가 버릴 수
+        // 있다 — 정지했던 주행이 다시 "진행 중"으로 보이거나 소요 시간이 널뛰는 식으로 나타난다.
+        // _rev가 역행하는 변경은 받아들이지 않는다(이 기기가 이미 더 앞서 있다는 뜻이므로).
+        // _rev가 없는 옛 데이터끼리는 0으로 취급해서 기존 동작 그대로 적용된다.
+        if (idx >= 0 && (data._rev || 0) < (logs[idx]._rev || 0)) return;
         if (idx >= 0) logs[idx] = data; else logs.push(data);
       });
       recomputeActiveIds();
@@ -1581,9 +1592,22 @@
     }
     return copy;
   }
+  // 여러 폰이 같은 로깅(log) 하나를 번갈아 조작할 수 있어서, 이 기기가 화면 꺼짐 등으로 한동안
+  // 최신 상태를 못 받은 채(= 로컬이 옛날 상태인 채) 뭔가를 눌러서 그 옛날 전체 상태를 그대로
+  // 클라우드에 다시 올리면, 그 사이 다른 기기가 만든 더 최신 변경(정지/목적지 이동 등)이 통째로
+  // 되돌아가 버린다. _rev는 이 log를 몇 번째로 올리는지 세는 단순 증가 카운터 — 받는 쪽
+  // (subscribeToCloudLogs)에서 "내가 이미 더 높은 _rev를 갖고 있으면 이 변경은 무시" 식으로 걸러서,
+  // 적어도 이미 최신 상태를 보고 있는 기기가 뒤늦게 도착한 옛날 스냅샷에 되돌려지는 건 막는다.
+  // (클라우드 문서 자체가 잠깐 옛날 값으로 덮였다가, 그 다음 실제 조작이 일어나면 다시 앞서가는
+  // 식으로 복구됨 — 완벽한 충돌 해결은 아니지만 뒤로 가는 것만은 막아준다.)
+  function bumpRev(log){
+    log._rev = (log._rev || 0) + 1;
+    return log._rev;
+  }
   function pushLogToCloud(log){
-    if (!cloudReady || !roomRef || !log) return;
+    if (!cloudReady || !roomRef || !log || log.__deleted) return;
     if (!isOwnLog(log)) return; // 다른 기기가 시작한 로깅은 path 전체 업로드를 하지 않는다(위 DEVICE_ID 설명 참고)
+    bumpRev(log);
     roomRef.doc(log.id).set(toCloudSafeLog(log), { merge: true }).catch(function(){
       setSyncState('error');
       showToast('동기화 저장에 실패했어요. 팀 코드를 확인해주세요.');
@@ -1594,7 +1618,8 @@
   // path를 뺀 나머지 필드만 별도로 올린다(merge:true라서 클라우드의 기존 path는 그대로 유지됨).
   // path 자체는 startRoadTracking/visibilitychange의 주기적 pushLogToCloud가 계속 갱신해준다.
   function pushLogStateToCloud(log){
-    if (!cloudReady || !roomRef || !log) return;
+    if (!cloudReady || !roomRef || !log || log.__deleted) return;
+    bumpRev(log);
     var payload = toCloudSafeLog(log);
     delete payload.path;
     roomRef.doc(log.id).set(payload, { merge: true }).catch(function(){
@@ -2930,6 +2955,7 @@
     watchId = navigator.geolocation.watchPosition(function(pos){
       setGeoStatus(null);
       lastFixAt = Date.now();
+      geoPermissionDenied = false; // 위치가 실제로 잡혔다는 건 권한이 (다시) 허용됐다는 뜻
       var log = logs.find(function(l){ return l.id === activeRoadId; });
       if (!log) return;
       if (!isGoodGpsFix(pos, log)) return; // GPS 튐(오차 큰 좌표/비정상 속력) — 이번 좌표는 버림
@@ -2964,6 +2990,13 @@
         pushLogToCloud(log);
       }
     }, function(err){
+      // code 1 = PERMISSION_DENIED. 이 경우 watchPosition은 다시 콜백을 안 주므로 재시도해봐야
+      // 똑같이 실패한다 — 워치독이 계속 재시작을 반복하며 상태 메시지만 깜빡이지 않도록 멈춘다.
+      if (err && err.code === 1){
+        geoPermissionDenied = true;
+        setGeoStatus('위치 권한이 꺼져 있어요. 기기 설정에서 이 앱(브라우저)의 위치 권한을 켜주세요.');
+        return;
+      }
       setGeoStatus('위치 접근 실패: ' + (err && err.message ? err.message : '권한을 확인해주세요') );
     }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 });
   }
@@ -2986,6 +3019,7 @@
     stopGeoWatchdog();
     geoWatchdogInterval = setInterval(function(){
       if (!activeRoadId || watchId === null) return;
+      if (geoPermissionDenied) return; // 권한이 꺼진 상태에선 재시작해봐야 또 실패할 뿐이므로 멈춰 있는다
       if (Date.now() - lastFixAt < GEO_STALE_MS) return;
       // watchPosition이 살아있다면 스스로도 곧 timeout 에러를 낼 시간이지만,
       // WebKit 버그로 죽은 경우엔 에러조차 안 나므로 여기서 직접 재시작해준다.
@@ -3916,6 +3950,11 @@
     doDeleteLog: function(id){
       clearRoadPolylines(id);
       var wasActiveRoad = (activeRoadId === id);
+      // 삭제된 뒤에도 이 로그 객체를 들고 있는 비동기 작업(주소 자동 채움 재시도 등)이 남아있을 수
+      // 있어서, 배열에서 지우는 것만으로는 부족하다 — 그 작업이 나중에 끝나서 클라우드에 다시
+      // 올려버리면 삭제한 기록이 되살아난다. 객체 자체에 표시해둬서 그런 뒤늦은 시도를 막는다.
+      var deletedLog = logs.find(function(l){ return l.id === id; });
+      if (deletedLog) deletedLog.__deleted = true;
       logs = logs.filter(function(l){ return l.id !== id; });
       if (wasActiveRoad) stopRoadTracking();
       saveLogs();
