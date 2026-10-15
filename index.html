@@ -1281,16 +1281,19 @@
   var modalOnSave = null;
   // 삭제 확인창 — ×를 잘못 눌러 기록이 날아가는(팀 코드면 모든 폰에서) 사고를 막는다.
   var pendingDeleteAction = null;
-  function askDeleteConfirm(message, onYes){
+  function askConfirm(title, message, yesLabel, onYes){
     pendingDeleteAction = onYes;
     openModal(
-      '<h3>삭제 확인</h3>' +
-      '<p class="modal-field-label">' + escapeHtml(message) + ' 되돌릴 수 없어요.</p>' +
+      '<h3>' + escapeHtml(title) + '</h3>' +
+      '<p class="modal-field-label">' + escapeHtml(message) + '</p>' +
       '<div class="popup-actions">' +
         '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
-        '<button class="btn-danger" onclick="AppMap.confirmDeleteYes()">삭제</button>' +
+        '<button class="btn-danger" onclick="AppMap.confirmDeleteYes()">' + escapeHtml(yesLabel) + '</button>' +
       '</div>'
     );
+  }
+  function askDeleteConfirm(message, onYes){
+    askConfirm('삭제 확인', message + ' 되돌릴 수 없어요.', '삭제', onYes);
   }
   var modalEnvChoice = 'road'; // 로깅 시작 모달에서 고른 환경: 'road'(일반도로) | 'highway'(고속도로)
 
@@ -1451,13 +1454,71 @@
           if (leg.address === undefined) leg.address = '';
         });
       }
-      if (!l.endTime){
-        if (l.type === 'road') activeRoadId = l.id;
-        if (l.type === 'parking_lot') activeLotId = l.id;
-        if (l.type === 'parking') activeParkingId = l.id;
-        if (l.type === 'parking_scene') activeSceneId = l.id;
-      }
     });
+    // 진행 중인 로깅은 원래 하나뿐이어야 한다(일반도로/주차장/주차는 서로 막혀 있음). 그런데 한 기기가
+    // 동기화 전에 새로 시작한 로깅과, 예전에 안 끝난 채 남은 로깅이 나중에 합쳐지면 둘 다 "진행 중"이 되고,
+    // 예전엔 배열 순서상 마지막 것을 골라서 기기마다 서로 다른 로깅을 "지금 로깅"으로 잡았다(한 기기에선 정지가
+    // 되는데 다른 기기에선 안 되는 증상). 이제는 항상 "가장 최근에 시작한 것"을 고르고, 나머지는 오래 남은
+    // 로깅(stale)으로 보고 자동 정리 대상으로 표시한다.
+    staleLiveIds = [];
+    var live = logs.filter(function(l){ return !l.endTime && (l.type === 'road' || l.type === 'parking_lot' || l.type === 'parking'); })
+      .sort(function(a, b){ return (b.startTime || 0) - (a.startTime || 0); });
+    live.forEach(function(l, i){
+      if (i > 0){ staleLiveIds.push(l.id); return; }
+      if (l.type === 'road') activeRoadId = l.id;
+      if (l.type === 'parking_lot') activeLotId = l.id;
+      if (l.type === 'parking') activeParkingId = l.id;
+    });
+    var scenes = logs.filter(function(l){ return !l.endTime && l.type === 'parking_scene'; })
+      .sort(function(a, b){ return (b.startTime || 0) - (a.startTime || 0); });
+    if (scenes.length) activeSceneId = scenes[0].id;
+  }
+  var staleLiveIds = [];
+  // 로깅이 마지막으로 뭔가 기록된 시각(경로 점/구간/이벤트/목적지 시각 중 가장 늦은 것). 안 끝난 채 남은 로깅을
+  // 정리할 때 "종료 시각"으로 쓴다 — 지금 시각으로 닫으면 며칠짜리 로깅이 돼 버리기 때문.
+  function lastActivityTime(log){
+    var t = log.startTime || 0;
+    function up(v){ if (typeof v === 'number' && v > t && v <= Date.now()) t = v; }
+    if (log.path && log.path.length) up(pointTime(log.path[log.path.length - 1]));
+    [log.driveSegments, log.restSegments].forEach(function(segs){ (segs || []).forEach(function(sg){ up(sg.start); up(sg.end); }); });
+    (log.events || []).forEach(function(e){ up(e.time); });
+    (log.legs || []).forEach(function(lg){
+      up(lg.startTime); up(lg.endTime); up(lg.arrivedTime);
+      [lg.lotSegments, lg.parkSegments].forEach(function(segs){ (segs || []).forEach(function(sg){ up(sg.start); up(sg.end); }); });
+    });
+    return t;
+  }
+  function closeOpenParts(log, endTime){
+    [log.driveSegments, log.restSegments].forEach(function(segs){
+      (segs || []).forEach(function(seg){ if (seg.end === null || seg.end === undefined) seg.end = endTime; });
+    });
+    (log.legs || []).forEach(function(lg){
+      [lg.lotSegments, lg.parkSegments].forEach(function(segs){
+        (segs || []).forEach(function(seg){ if (seg.end === null || seg.end === undefined) seg.end = endTime; });
+      });
+      lg.lotMode = null;
+    });
+    if (log.legs && log.legs.length){
+      var lastLg = log.legs[log.legs.length - 1];
+      if (lastLg.endTime === null || lastLg.endTime === undefined) lastLg.endTime = endTime;
+    }
+  }
+  function autoCloseStaleLogs(){
+    if (!staleLiveIds.length) return;
+    var ids = staleLiveIds.slice(); staleLiveIds = [];
+    var n = 0;
+    ids.forEach(function(id){
+      var lg = logs.find(function(l){ return l.id === id; });
+      if (!lg || lg.endTime) return;
+      lg.endTime = lastActivityTime(lg);
+      closeOpenParts(lg, lg.endTime);
+      pushLogStateToCloud(lg);
+      n++;
+    });
+    if (n){
+      saveLogs();
+      showToast('끝나지 않은 채 남아 있던 이전 로깅 ' + n + '건을 마지막 기록 시각으로 종료 처리했어요.', 5000);
+    }
   }
   async function loadLogs(){
     try{
@@ -1467,6 +1528,7 @@
       logs = [];
     }
     recomputeActiveIds();
+    autoCloseStaleLogs();
   }
   async function saveLogs(){
     try{
@@ -1506,10 +1568,14 @@
       cloudReady = true;
       setSyncState('connecting');
       subscribeToCloudLogs();
+      // 이 기기에 저장돼 있던 기록은 서버와 같다고 보고 기준으로 삼는다(그래야 처음 누른 버튼이 옛날 전체 상태를
+      // 통째로 올려서 서버의 최신 상태를 되돌리지 않는다). 서버에 없던 새 기록은 마이그레이션이 올린다.
+      logs.forEach(function(l){ if (!cloudSynced[l.id]) markCloudSynced(l); });
       migrateLocalLogsToCloud();
       subscribeToCloudSpots();
       migrateLocalSpotsToCloud();
-      startPresence();
+      // 접속 기기 수 표시는 부가 기능이라, 여기서 오류가 나도 기록 동기화는 멈추지 않게 따로 감싼다.
+      try { startPresence(); } catch(ePresence){ presenceOk = false; }
     }catch(e){
       cloudReady = false;
       showToast('동기화 연결에 실패했어요. 화면을 새로고침한 뒤 다시 시도해주세요.');
@@ -1535,15 +1601,29 @@
         // (1) 그 사이 쌓인 GPS 좌표가 사라지고, (2) 진행 중이던 객체 참조가 끊겨 주소 자동채움 같은
         // 비동기 작업이 엉뚱한 객체에 쓰게 된다. 로컬이 항상 더 최신이므로 건너뛴다.
         if (idx >= 0 && change.doc.metadata && change.doc.metadata.hasPendingWrites) return;
-        // 다른 기기가 한동안 최신 상태를 못 받은 채(화면 꺼짐 등) 옛날 상태를 통째로 다시 올리면,
-        // 이 기기가 이미 보고 있는 더 최신 상태(_rev가 더 큼)가 그 옛날 스냅샷으로 되돌아가 버릴 수
-        // 있다 — 정지했던 주행이 다시 "진행 중"으로 보이거나 소요 시간이 널뛰는 식으로 나타난다.
-        // _rev가 역행하는 변경은 받아들이지 않는다(이 기기가 이미 더 앞서 있다는 뜻이므로).
-        // _rev가 없는 옛 데이터끼리는 0으로 취급해서 기존 동작 그대로 적용된다.
-        if (idx >= 0 && (data._rev || 0) < (logs[idx]._rev || 0)) return;
-        if (idx >= 0) logs[idx] = data; else logs.push(data);
+        // (예전엔 기기마다 따로 세는 _rev 번호로 "옛날 상태"를 걸러냈는데, 번호가 기기끼리 비교가 안 돼서
+        // 경로를 5초마다 올리는 폰의 번호가 항상 더 커지고 → 다른 기기(노트북)에서 누른 정지/변경이
+        // 그 폰에서 영원히 무시되는 버그가 됐다. 이제는 상태 변경을 "바뀐 필드만" 올리고 경로는 path만
+        // 올려서, 서로 옛날 값으로 덮어쓰는 일 자체가 없게 만들었으므로 번호 비교는 쓰지 않는다.)
+        if (idx >= 0){
+          // 이 기기가 경로를 기록 중인 로깅이면, 아직 서버에 못 올린 최근 좌표가 로컬에 더 있을 수 있으니
+          // 서버 쪽 path가 더 짧을 땐 로컬 path를 유지한다.
+          var localLog = logs[idx];
+          if (isOwnLog(localLog) && Array.isArray(localLog.path) && localLog.path.length > (data.path ? data.path.length : 0)){
+            data.path = localLog.path;
+          }
+          // 서버 문서가 아직 일부 필드만 있는 상태(처음 만들어지는 중)일 수 있으니, 로컬에만 있는 필드는 유지한다.
+          var mergedLog = {};
+          for (var lk in localLog) if (Object.prototype.hasOwnProperty.call(localLog, lk)) mergedLog[lk] = localLog[lk];
+          for (var dk in data) if (Object.prototype.hasOwnProperty.call(data, dk)) mergedLog[dk] = data[dk];
+          logs[idx] = mergedLog;
+        } else {
+          logs.push(data);
+        }
+        markCloudSynced(data);
       });
       recomputeActiveIds();
+      autoCloseStaleLogs();
       // 다른 기기에서 시작된 일반도로 로깅이면 이 기기도 자기 위치를 추적해서 같이 경로를 채워줌.
       // 반대로 다른 기기가 이미 종료했으면 이 기기의 추적도 같이 멈춤. 단, 트립은 "주행 기록" 중일
       // 때만 추적한다 — 정지/휴식 중에 이 알림이 와서 추적을 되살리면 정지/휴식이 풀려버린다.
@@ -1600,17 +1680,40 @@
   // 적어도 이미 최신 상태를 보고 있는 기기가 뒤늦게 도착한 옛날 스냅샷에 되돌려지는 건 막는다.
   // (클라우드 문서 자체가 잠깐 옛날 값으로 덮였다가, 그 다음 실제 조작이 일어나면 다시 앞서가는
   // 식으로 복구됨 — 완벽한 충돌 해결은 아니지만 뒤로 가는 것만은 막아준다.)
-  function bumpRev(log){
-    log._rev = (log._rev || 0) + 1;
-    return log._rev;
+  // 서버에 "마지막으로 올렸거나 받은" 각 필드의 값(JSON). 상태 저장 때 이 값과 달라진 필드만 올려서,
+  // 이 기기가 모르는 사이 다른 기기가 바꾼 필드(정지/목적지 이동 등)를 옛날 값으로 덮어쓰지 않는다.
+  var cloudSynced = {}; // logId -> { 필드명: JSON 문자열 }
+  function stateFieldsOf(obj){
+    var out = {};
+    var safe = toCloudSafeLog(obj);
+    for (var k in safe){
+      if (k === 'path' || k.indexOf('__') === 0) continue;
+      out[k] = safe[k];
+    }
+    return out;
+  }
+  function markCloudSynced(log){
+    var f = stateFieldsOf(log), m = {};
+    for (var k in f) m[k] = JSON.stringify(f[k]);
+    cloudSynced[log.id] = m;
   }
   function pushLogToCloud(log){
+    // 로깅 전체를 한 번에 올린다 — 처음 올릴 때(마이그레이션)만 쓴다. 주기적인 경로 업로드는 pushPathToCloud.
     if (!cloudReady || !roomRef || !log || log.__deleted) return;
-    if (!isOwnLog(log)) return; // 다른 기기가 시작한 로깅은 path 전체 업로드를 하지 않는다(위 DEVICE_ID 설명 참고)
-    bumpRev(log);
-    roomRef.doc(log.id).set(toCloudSafeLog(log), { merge: true }).catch(function(){
+    if (!isOwnLog(log)) return;
+    roomRef.doc(log.id).set(toCloudSafeLog(log), { merge: true }).then(function(){ markCloudSynced(log); }).catch(function(){
       setSyncState('error');
       showToast('동기화 저장에 실패했어요. 팀 코드를 확인해주세요.');
+    });
+  }
+  // 경로(path)만 올린다. 예전엔 5초마다 로깅 전체(정지/휴식 같은 상태 포함)를 올려서, 그 사이 다른
+  // 기기가 바꾼 상태를 계속 옛날 값으로 되돌렸다. 경로 업로드는 로깅을 시작한 기기만 한다.
+  function pushPathToCloud(log){
+    if (!cloudReady || !roomRef || !log || log.__deleted) return;
+    if (!isOwnLog(log)) return;
+    var cloudPath = toCloudSafeLog({ path: log.path || [] }).path;
+    roomRef.doc(log.id).set({ path: cloudPath }, { merge: true }).catch(function(){
+      setSyncState('error');
     });
   }
   // 장시간 트립의 path(GPS 좌표 배열)는 계속 쌓여서 Firestore 문서 용량 제한(1MB)에 걸릴 수 있다.
@@ -1619,10 +1722,20 @@
   // path 자체는 startRoadTracking/visibilitychange의 주기적 pushLogToCloud가 계속 갱신해준다.
   function pushLogStateToCloud(log){
     if (!cloudReady || !roomRef || !log || log.__deleted) return;
-    bumpRev(log);
-    var payload = toCloudSafeLog(log);
-    delete payload.path;
-    roomRef.doc(log.id).set(payload, { merge: true }).catch(function(){
+    var fields = stateFieldsOf(log);
+    var synced = cloudSynced[log.id] || {};
+    var changed = {}, any = false;
+    Object.keys(fields).forEach(function(k){
+      var j = JSON.stringify(fields[k]);
+      if (synced[k] !== j){ changed[k] = fields[k]; any = true; }
+    });
+    if (!any) return; // 서버와 똑같으면 올릴 게 없다
+    var prev = {};
+    Object.keys(changed).forEach(function(k){ prev[k] = synced[k]; synced[k] = JSON.stringify(changed[k]); });
+    cloudSynced[log.id] = synced;
+    roomRef.doc(log.id).set(changed, { merge: true }).catch(function(){
+      // 실패했으면 다음 저장 때 이 필드들을 다시 올리도록 "안 올림"으로 되돌린다
+      Object.keys(prev).forEach(function(k){ if (prev[k] === undefined) delete synced[k]; else synced[k] = prev[k]; });
       setSyncState('error');
       showToast('동기화 저장에 실패했어요. 팀 코드를 확인해주세요.');
     });
@@ -2324,7 +2437,7 @@
     pushLogStateToCloud(log);
     // pushLogStateToCloud는 용량 때문에 path를 빼고 올리므로, 종료 직전 마지막 몇 초치 경로가 다른
     // 기기에 안 가는 일이 없도록 일반도로 로깅은 path까지 한 번 더 올린다.
-    if (log && type === 'road' && log.path && log.path.length) pushLogToCloud(log);
+    if (log && type === 'road' && log.path && log.path.length) pushPathToCloud(log);
     renderLogPanel();
     renderLogList();
   }
@@ -2987,7 +3100,7 @@
       var now = Date.now();
       if (now - lastPathPushAt > 5000){
         lastPathPushAt = now;
-        pushLogToCloud(log);
+        pushPathToCloud(log);
       }
     }, function(err){
       // code 1 = PERMISSION_DENIED. 이 경우 watchPosition은 다시 콜백을 안 주므로 재시도해봐야
@@ -3054,7 +3167,7 @@
         if (followMode && map) map.setCenter(kakaoLatLng);
       }
       saveLogs();
-      pushLogToCloud(log);
+      pushPathToCloud(log);
     }, function(){ /* 실패해도 다음 watchPosition을 기다리면 되므로 무시 */ }, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
   });
   function focusOnLog(logId, keepZoom){
@@ -3796,6 +3909,7 @@
         '<span>(' + formatDuration(totalDur) + ')</span>' +
         (isLive ? '<span class="log-item-live">LIVE</span>' : '') +
         (log.vehicle ? '<span class="legcard-trip-vehicle">' + escapeHtml(log.vehicle) + '</span>' : '') +
+        (isLive ? '<button type="button" class="item-force-stop" style="margin-left:auto;" onclick="AppMap.forceStopLog(\'' + log.id + '\')" title="끝나지 않은 채 남은 로깅을 지금 시각으로 강제 종료">강제종료</button>' : '') +
       '</div>' +
       legsHtml +
     '</div>';
@@ -3968,6 +4082,11 @@
     // 지금 이 시각으로 강제 종료한다. 이렇게 멈춘 채로 남은 로깅이 하나라도 있으면, 그 종류가
     // 겹쳐서 다른 로깅 시작/종료 버튼까지 같이 눌리지 않게 되는데, 그럴 때 여기서 풀어주면 된다.
     forceStopLog: function(id){
+      var lg0 = logs.find(function(l){ return l.id === id; });
+      if (!lg0 || lg0.endTime) return;
+      askConfirm('로깅 강제 종료', '"' + (lg0.label || '이 로깅') + '"을(를) 지금 시각으로 종료할까요? 끝나지 않은 채 남은 로깅을 정리할 때 써요.', '강제종료', function(){ AppMap.doForceStopLog(id); });
+    },
+    doForceStopLog: function(id){
       var log = logs.find(function(l){ return l.id === id; });
       if (!log || log.endTime) return;
       var wasActiveRoad = (activeRoadId === id);
@@ -4266,7 +4385,7 @@
       if (!dayLogs.length) return;
       openModal(
         '<h3>이 날짜 기록 삭제</h3>' +
-        '<p class="modal-field-label">' + escapeHtml(formatDateHeader(dayLogs[0].startTime)) + '의 로깅 기록 ' + dayLogs.length + '건을 전부 삭제해요. 되돌릴 수 없어요.</p>' +
+        '<p class="modal-field-label">' + escapeHtml(formatDateHeader(dayLogs[0].startTime)) + '의 로깅 기록 ' + dayLogs.length + '건을 전부 삭제해요.' + (dayLogs.some(function(l){ return !l.endTime; }) ? ' (끝나지 않은 진행 중 로깅도 같이 종료·삭제돼요.)' : '') + ' 되돌릴 수 없어요.</p>' +
         '<div class="popup-actions">' +
           '<button class="btn-secondary" onclick="AppMap.cancelModal()">취소</button>' +
           '<button class="btn-danger" onclick="AppMap.deleteDateLogs(\'' + dateKey + '\')">삭제</button>' +
@@ -4278,18 +4397,18 @@
       if (!dayLogs.length) { closeModal(); return; }
       // 지금 진행 중인 로깅이 이 날짜 안에 있으면(오늘 로깅 중인데 오늘 카드를 지우려는 경우 등)
       // 라이브 상태가 꼬이지 않도록 막는다.
-      var hasActive = dayLogs.some(function(l){ return !l.endTime; });
-      if (hasActive){
-        closeModal();
-        showToast('아직 진행 중인 로깅이 있어요. 먼저 종료한 뒤 삭제해주세요.');
-        return;
-      }
+      // 끝나지 않은 채 남은 로깅(예전 날짜에 LIVE로 남은 것 등)도 삭제할 수 있어야 정리가 된다 —
+      // 이전엔 "진행 중인 로깅이 있다"며 막아서 지울 방법이 없었다. 삭제 확인창에서 이미 안내했다.
       var idsToDelete = dayLogs.map(function(l){ return l.id; });
+      dayLogs.forEach(function(l){ l.__deleted = true; });
       idsToDelete.forEach(function(id){ clearRoadPolylines(id); });
       logs = logs.filter(function(l){ return dateKeyOf(l.startTime) !== dateKey; });
       saveLogs();
       idsToDelete.forEach(function(id){ deleteLogFromCloud(id); });
       recomputeActiveIds();
+      if (watchId !== null && !shouldTrackActiveRoad()) stopRoadTracking();
+      if (!isAnyLoggingActive()) releaseWakeLock();
+      tripPanelLegId = null;
       closeModal();
       renderLogPanel();
       renderLogList();
