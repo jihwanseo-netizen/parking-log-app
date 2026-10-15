@@ -1464,16 +1464,18 @@
     var live = logs.filter(function(l){ return !l.endTime && (l.type === 'road' || l.type === 'parking_lot' || l.type === 'parking'); })
       .sort(function(a, b){ return (b.startTime || 0) - (a.startTime || 0); });
     live.forEach(function(l, i){
-      if (i > 0){ staleLiveIds.push(l.id); return; }
+      // 가장 최근 것이 아니거나, 마지막 기록 후 12시간 넘게 아무 활동이 없으면(끄는 걸 깜빡한 로깅) 오래 남은 로깅으로 본다.
+      if (i > 0 || (Date.now() - lastActivityTime(l)) > STALE_LIVE_MS){ staleLiveIds.push(l.id); return; }
       if (l.type === 'road') activeRoadId = l.id;
       if (l.type === 'parking_lot') activeLotId = l.id;
       if (l.type === 'parking') activeParkingId = l.id;
     });
     var scenes = logs.filter(function(l){ return !l.endTime && l.type === 'parking_scene'; })
       .sort(function(a, b){ return (b.startTime || 0) - (a.startTime || 0); });
-    if (scenes.length) activeSceneId = scenes[0].id;
+    scenes.forEach(function(sc, i){ if (i > 0 || (Date.now() - lastActivityTime(sc)) > STALE_LIVE_MS) staleLiveIds.push(sc.id); else activeSceneId = sc.id; });
   }
   var staleLiveIds = [];
+  var STALE_LIVE_MS = 12 * 60 * 60 * 1000;
   // 로깅이 마지막으로 뭔가 기록된 시각(경로 점/구간/이벤트/목적지 시각 중 가장 늦은 것). 안 끝난 채 남은 로깅을
   // 정리할 때 "종료 시각"으로 쓴다 — 지금 시각으로 닫으면 며칠짜리 로깅이 돼 버리기 때문.
   function lastActivityTime(log){
