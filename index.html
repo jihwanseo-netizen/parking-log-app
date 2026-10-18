@@ -1124,6 +1124,12 @@
 <script>
 
 (function(){
+  // 배포할 때마다 바뀌는 값. 홈화면에 추가한 아이폰 앱(스탠드얼론 웹앱)은 iOS가 화면을 껐다 켜거나
+  // 다른 앱에 갔다 왔을 때 새로 네트워크에서 받아오지 않고 "얼려뒀던" 예전 화면을 그대로 다시 보여주는
+  // 경우가 흔해서(서비스 워커 캐시와는 별개의 iOS 자체 동작), 새 버전을 올려도 홈화면 아이콘은 계속
+  // 옛날 버전으로 남아있을 수 있다 — "정지가 안 눌린다" 같은 이미 고친 버그가 안 고쳐진 것처럼 보이는
+  // 원인 중 하나. checkForNewVersion()이 주기적으로 이 값을 서버와 비교해서, 다르면 새로고침을 안내한다.
+  var BUILD_ID = '2026-10-18-01';
   // ---- Local persistence shim ----
   // A plain browser has no window.storage API; this app was built expecting one.
   // Without this shim, every save silently fails and nothing survives a reload.
@@ -5049,6 +5055,47 @@
       navigator.serviceWorker.register('sw.js').catch(function(){});
     }
   } catch(e){}
+
+  // 홈화면 추가 앱이 옛 버전에 멈춰있는 문제(위 BUILD_ID 설명 참고) 대응: 서버의 실제 index.html을
+  // 받아서 그 안의 BUILD_ID와 지금 실행 중인 것을 비교한다. 다르면, 로깅 중이 아닐 때만 조용히
+  // 새로고침 배너를 보여준다(로깅 중에 갑자기 새로고침되면 진행 중인 추적이 끊기므로 그건 피함 —
+  // 사용자가 로깅을 끝낸 뒤 직접 눌러서 반영하도록 유도).
+  var newVersionBannerShown = false;
+  var lastVersionCheckAt = 0;
+  function checkForNewVersion(){
+    var now = Date.now();
+    if (now - lastVersionCheckAt < 2 * 60 * 1000) return; // 너무 자주 확인하지 않음
+    lastVersionCheckAt = now;
+    if (!/^https?:$/.test(location.protocol)) return;
+    fetch('./index.html', { cache: 'no-store' }).then(function(r){ return r.ok ? r.text() : null; }).then(function(html){
+      if (!html) return;
+      var m = html.match(/var BUILD_ID = '([^']+)'/);
+      if (!m || m[1] === BUILD_ID || newVersionBannerShown) return;
+      newVersionBannerShown = true;
+      showNewVersionBanner();
+    }).catch(function(){ /* 오프라인 등 — 조용히 무시, 다음 기회에 다시 확인 */ });
+  }
+  function showNewVersionBanner(){
+    function render(){
+      if (isAnyLoggingActive()){
+        // 로깅 중엔 방해하지 않고, 로깅이 끝날 때까지 기다렸다가 보여준다.
+        setTimeout(render, 30000);
+        return;
+      }
+      var el = document.createElement('div');
+      el.id = 'newVersionBanner';
+      el.textContent = '새 버전이 있어요 — 탭해서 새로고침';
+      el.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#12A594;color:#fff;' +
+        'text-align:center;padding:12px;font-size:14px;cursor:pointer;';
+      el.addEventListener('click', function(){ location.reload(); });
+      document.body.appendChild(el);
+    }
+    render();
+  }
+  document.addEventListener('visibilitychange', function(){
+    if (!document.hidden) checkForNewVersion();
+  });
+  setTimeout(checkForNewVersion, 4000);
 
   (async function start(){
     initMap();
