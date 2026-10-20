@@ -395,10 +395,11 @@
     background: var(--blue);
     border: none;
     color: #fff;
-    padding: 11px 8px;
+    padding: 16px 8px;
+    min-height: 54px;
     border-radius: 8px;
     font-weight: 800;
-    font-size: 13px;
+    font-size: 17px;
     cursor: pointer;
     font-family: inherit;
     margin-bottom: 8px;
@@ -451,21 +452,28 @@
   .trip-tag-grid{
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 6px;
+    gap: 8px;
     margin-top: 10px;
   }
   .trip-tag-btn{
     background: var(--asphalt);
     border: 1px solid var(--line);
     color: var(--ink);
-    padding: 8px 6px;
-    border-radius: 7px;
-    font-weight: 600;
-    font-size: 11.5px;
+    padding: 15px 8px;
+    min-height: 50px;
+    border-radius: 9px;
+    font-weight: 700;
+    font-size: 16px;
     cursor: pointer;
     font-family: inherit;
+    transition: transform 0.08s, filter 0.08s;
   }
-  .trip-tag-btn:active{ background: var(--yellow); color: #1A1C1F; border-color: var(--yellow); }
+  /* 버튼 종류별 색 구분: 특수차량=주황, 어린이=연한 노랑, S자=파랑, 기타=회색 */
+  .trip-tag-btn[data-tag="special"]{ background: var(--orange); border-color: var(--orange); color: #fff; }
+  .trip-tag-btn[data-tag="child"]{ background: #FCEBA6; border-color: #F4B400; color: #4A3B00; }
+  .trip-tag-btn[data-tag="s_curve"]{ background: var(--blue); border-color: var(--blue); color: #fff; }
+  .trip-tag-btn[data-tag="etc"]{ background: var(--gray); border-color: var(--gray); color: #fff; }
+  .trip-tag-btn:active{ transform: scale(0.96); filter: brightness(1.15); }
   #tripMemo{
     width: 100%; padding: 7px 9px; background: var(--asphalt);
     border: 1px solid var(--line); border-radius: 7px; color: var(--ink); font-size: 13px; outline: none;
