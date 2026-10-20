@@ -435,6 +435,27 @@
   .trip-mode-btn-park{ background: #7C5CFC; }
   .trip-mode-btn-leave{ background: var(--gray); }
   .trip-mode-btn.active{ box-shadow: 0 0 0 2px rgba(255,255,255,0.65) inset; }
+  /* 주차장 기록/주차 기록 시작 버튼 — 선택 전엔 트립 태그 버튼(특수차량/어린이 등)과 같은 크기로
+     나란히 배치하고, 시작을 눌러 "정지" 상태가 되면(둘 중 하나만 남음) 주행 기록 시작 버튼만큼
+     크게 키워 전체 폭을 차지하게 한다 — 운전 중 정지 버튼을 더 쉽게 누르게 하기 위함. */
+  .trip-lotpark-grid{
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .trip-mode-btn-lot, .trip-mode-btn-park{
+    padding: 15px 4px;
+    min-height: 50px;
+    border-radius: 9px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+  .trip-mode-btn-lot.active, .trip-mode-btn-park.active{
+    grid-column: 1 / -1;
+    padding: 16px 8px;
+    min-height: 54px;
+    font-size: 17px;
+  }
   .trip-rest-timer{
     margin-top: 8px;
     padding: 8px 10px;
@@ -1057,8 +1078,10 @@
             <button type="button" class="btn-secondary" id="btnTripPass">경유 (주차 안 함 · 다음 목적지로)</button>
           </div>
           <div class="trip-mode-row" id="tripLotRow" style="display:none;">
-            <button type="button" class="trip-mode-btn trip-mode-btn-lot" id="btnLotRecord">🅿️ 주차장 기록 시작</button>
-            <button type="button" class="trip-mode-btn trip-mode-btn-park" id="btnParkRecord">🚙 주차 기록 시작</button>
+            <div class="trip-lotpark-grid">
+              <button type="button" class="trip-mode-btn trip-mode-btn-lot" id="btnLotRecord">🅿️ 주차장 기록 시작</button>
+              <button type="button" class="trip-mode-btn trip-mode-btn-park" id="btnParkRecord">🚙 주차 기록 시작</button>
+            </div>
             <button type="button" class="trip-mode-btn trip-mode-btn-leave" id="btnTripLeaveLot" style="display:none;">🚪 주차장에서 나옴 (다음 장소로 이동 시작)</button>
           </div>
           <div class="trip-rest-timer" id="tripLotRecordTimer" style="display:none;"></div>
